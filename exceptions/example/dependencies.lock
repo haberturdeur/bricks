@@ -1,0 +1,19 @@
+dependencies:
+  haberturdeur/exceptions:
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    source:
+      path: /home/tom/Projects/bricks/exceptions
+      type: local
+    version: '*'
+  idf:
+    source:
+      type: idf
+    version: 6.0.0
+direct_dependencies:
+- haberturdeur/exceptions
+- idf
+manifest_hash: c741f179106c9d5b231a0a218dc0e5fd4d0debf59af4bac6d7cfe05dfb3502e6
+target: esp32s3
+version: 2.0.0
