@@ -1,0 +1,43 @@
+dependencies:
+  haberturdeur/disnet:
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    - git: https://github.com/haberturdeur/bricks.git
+      name: haberturdeur/exceptions
+      path: exceptions
+    - git: https://github.com/haberturdeur/bricks.git
+      name: haberturdeur/glaze
+      path: glaze
+    source:
+      path: /home/tom/Projects/bricks/disnet
+      type: local
+    version: '*'
+  haberturdeur/exceptions:
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    source:
+      path: /home/tom/Projects/bricks/exceptions
+      type: local
+    version: '*'
+  haberturdeur/glaze:
+    dependencies:
+    - name: idf
+      version: '>=5.0.0'
+    source:
+      path: /home/tom/Projects/bricks/glaze
+      type: local
+    version: '*'
+  idf:
+    source:
+      type: idf
+    version: 5.5.1
+direct_dependencies:
+- haberturdeur/disnet
+- haberturdeur/exceptions
+- haberturdeur/glaze
+- idf
+manifest_hash: 3034a5d49320c939ea12b9a8048a4a6009114c9159e0647ed18955cae1b433c2
+target: esp32s3
+version: 2.0.0

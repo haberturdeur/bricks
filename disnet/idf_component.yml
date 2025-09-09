@@ -1,0 +1,15 @@
+dependencies:
+  idf:
+    version: ">=5.4.0"
+
+  esp_wifi:
+    require: public
+
+  haberturdeur/exceptions:
+    git: https://github.com/haberturdeur/bricks.git
+    path: exceptions
+
+  haberturdeur/glaze:
+    git: https://github.com/haberturdeur/bricks.git
+    path: glaze
+

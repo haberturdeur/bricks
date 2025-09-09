@@ -1,0 +1,13 @@
+dependencies:
+  idf:
+    version: ">=5.4.0"
+
+  haberturdeur/exceptions:
+    override_path: ../../../exceptions/
+
+  haberturdeur/glaze:
+    override_path: ../../../glaze/
+
+  haberturdeur/disnet:
+    override_path: ../../
+
