@@ -5,6 +5,9 @@ dependencies:
   esp_wifi:
     require: public
 
+  mbedtls:
+    require: public
+
   haberturdeur/exceptions:
     git: https://github.com/haberturdeur/bricks.git
     path: exceptions

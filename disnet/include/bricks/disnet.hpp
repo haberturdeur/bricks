@@ -76,6 +76,7 @@ enum class Type : std::uint8_t {
     ReliableAck,
 
     Segmented,
+    SegmentedAnnounce,
     SegmentedAck,
     SegmentedNack,
 
