@@ -111,7 +111,7 @@ public:
     }
 };
 
-void terminate_handler() {
+inline void terminate_handler() {
     try {
         std::exception_ptr eptr{std::current_exception()};
 
@@ -134,7 +134,7 @@ void terminate_handler() {
     std::exit(EXIT_FAILURE);
 }
 
-void setup_handler() {
+inline void setup_handler() {
     using namespace detail;
     std::set_terminate(terminate_handler);
 
