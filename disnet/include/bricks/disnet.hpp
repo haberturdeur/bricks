@@ -212,6 +212,10 @@ public:
         bricks::disnet::send_raw(_channel, _starting_ttl, {}, payload);
     }
 
+    void broadcast_raw_local(std::span<const std::uint8_t> payload) {
+        bricks::disnet::send_raw(_channel, 0, {}, payload);
+    }
+
     AckFuture send_reliable(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload) {
         return bricks::disnet::send_reliable(_channel, _starting_ttl, targets, payload);
     }
