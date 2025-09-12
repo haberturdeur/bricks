@@ -185,55 +185,47 @@ TimePoint last_heartbeat(std::uint8_t channel, const MacAddress& address);
 
 std::vector<std::pair<MacAddress, TimePoint>> neighbours(std::uint8_t channel, std::optional<TimePoint> cutoff = std::nullopt);
 
+inline std::uint8_t g_default_ttl = 15;
+
 class Channel {
 private:
     const std::uint8_t _channel;
-    std::uint8_t _starting_ttl;
 
 public:
-    Channel(std::uint8_t channel, std::uint8_t starting_ttl = 15)
-        : _channel(channel)
-        , _starting_ttl(starting_ttl) {
+    Channel(std::uint8_t channel)
+        : _channel(channel) {
     }
 
     void on(Callback&& cb) {
         register_handler(_channel, std::forward<Callback>(cb));
     }
 
-    void set_starting_ttl(std::uint8_t ttl) {
-        _starting_ttl = ttl;
+    void send_raw(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+        bricks::disnet::send_raw(_channel, ttl, targets, payload);
     }
 
-    void send_raw(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload) {
-        bricks::disnet::send_raw(_channel, _starting_ttl, targets, payload);
+    void broadcast_raw(std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+        bricks::disnet::send_raw(_channel, ttl, {}, payload);
     }
 
-    void broadcast_raw(std::span<const std::uint8_t> payload) {
-        bricks::disnet::send_raw(_channel, _starting_ttl, {}, payload);
+    AckFuture send_reliable(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+        return bricks::disnet::send_reliable(_channel, ttl, targets, payload);
     }
 
-    void broadcast_raw_local(std::span<const std::uint8_t> payload) {
-        bricks::disnet::send_raw(_channel, 0, {}, payload);
+    AckFuture send_segmented(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+        return bricks::disnet::send_segmented(_channel, ttl, targets, payload);
     }
 
-    AckFuture send_reliable(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload) {
-        return bricks::disnet::send_reliable(_channel, _starting_ttl, targets, payload);
+    void send_heartbeat(std::uint8_t ttl = g_defautl_ttl) {
+        bricks::disnet::send_heartbeat(_channel, ttl); 
     }
 
-    AckFuture send_segmented(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload) {
-        return bricks::disnet::send_segmented(_channel, _starting_ttl, targets, payload);
+    void ensure_heartbeat(TimePoint cutoff, std::uint8_t ttl = g_defautl_ttl) {
+        bricks::disnet::ensure_heartbeat(_channel, ttl, cutoff); 
     }
 
-    void send_heartbeat() {
-        bricks::disnet::send_heartbeat(_channel, _starting_ttl); 
-    }
-
-    void ensure_heartbeat(TimePoint cutoff) {
-        bricks::disnet::ensure_heartbeat(_channel, _starting_ttl, cutoff); 
-    }
-
-    void ensure_heartbeat(std::chrono::milliseconds cutoff) {
-        bricks::disnet::ensure_heartbeat(_channel, _starting_ttl, cutoff);
+    void ensure_heartbeat(std::chrono::milliseconds cutoff, std::uint8_t ttl = g_defautl_ttl) {
+        bricks::disnet::ensure_heartbeat(_channel, ttl, cutoff);
     }
 
     TimePoint last_heartbeat(const MacAddress& address) {
