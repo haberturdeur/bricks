@@ -200,31 +200,31 @@ public:
         register_handler(_channel, std::forward<Callback>(cb));
     }
 
-    void send_raw(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+    void send_raw(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_default_ttl) {
         bricks::disnet::send_raw(_channel, ttl, targets, payload);
     }
 
-    void broadcast_raw(std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+    void broadcast_raw(std::span<const std::uint8_t> payload, std::uint8_t ttl = g_default_ttl) {
         bricks::disnet::send_raw(_channel, ttl, {}, payload);
     }
 
-    AckFuture send_reliable(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+    AckFuture send_reliable(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_default_ttl) {
         return bricks::disnet::send_reliable(_channel, ttl, targets, payload);
     }
 
-    AckFuture send_segmented(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_defautl_ttl) {
+    AckFuture send_segmented(const std::set<MacAddress>& targets, std::span<const std::uint8_t> payload, std::uint8_t ttl = g_default_ttl) {
         return bricks::disnet::send_segmented(_channel, ttl, targets, payload);
     }
 
-    void send_heartbeat(std::uint8_t ttl = g_defautl_ttl) {
+    void send_heartbeat(std::uint8_t ttl = g_default_ttl) {
         bricks::disnet::send_heartbeat(_channel, ttl); 
     }
 
-    void ensure_heartbeat(TimePoint cutoff, std::uint8_t ttl = g_defautl_ttl) {
+    void ensure_heartbeat(TimePoint cutoff, std::uint8_t ttl = g_default_ttl) {
         bricks::disnet::ensure_heartbeat(_channel, ttl, cutoff); 
     }
 
-    void ensure_heartbeat(std::chrono::milliseconds cutoff, std::uint8_t ttl = g_defautl_ttl) {
+    void ensure_heartbeat(std::chrono::milliseconds cutoff, std::uint8_t ttl = g_default_ttl) {
         bricks::disnet::ensure_heartbeat(_channel, ttl, cutoff);
     }
 
