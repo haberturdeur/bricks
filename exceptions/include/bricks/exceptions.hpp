@@ -9,6 +9,7 @@
 #include <string>
 #include <source_location>
 #include <concepts>
+#include <utility>
 
 namespace bricks::exceptions {
 
@@ -111,6 +112,12 @@ public:
     }
 };
 
+class InvalidState : public std::logic_error {
+public:
+    explicit InvalidState(const std::string& what)
+        : std::logic_error(what) {}
+};
+
 inline void terminate_handler() {
     try {
         std::exception_ptr eptr{std::current_exception()};
@@ -153,4 +160,3 @@ inline void setup_handler() {
             throw Exception(IDF(__err, #x)); \
         }                                    \
     } while (0)
-
