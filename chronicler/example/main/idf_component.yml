@@ -1,0 +1,8 @@
+dependencies:
+  ## Required IDF version
+  idf:
+    version: ">=5.4.0"
+
+  haberturdeur/exceptions:
+    public: true
+    override_path: ../../
