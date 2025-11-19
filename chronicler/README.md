@@ -29,7 +29,7 @@ Because NOR flash erases to `1` and programs to `0`, these flags are stored inve
 * “Clearing/setting a flag” in software corresponds to programming a 0 on flash.
 * Returning a flag to 1 requires erasing the containing sector.
 
-Per-record metadata bits are stored in a metadata area at the start of each sector, followed by the packed record payloads.
+Per-record metadata bits are stored in a metadata area at the start of each sector, followed by the packed record payloads. The metadata area is padded to a 32-bit boundary to guarantee aligned flash operations.
 
 ### Capacity per Sector
 
@@ -67,7 +67,8 @@ typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t entry_size;   // == E
-    uint32_t all_zeros;    // initialization watermark; written AFTER header words
+    uint32_t initialized;  // initialization watermark; written AFTER header words
+    uint32_t old;          // old watermark; use the second slot
     uint8_t  bitmap[];     // 2 bits per data sector (CHRON_SEC_*), stored inverted
 } sector_meta_t;
 ```
@@ -108,13 +109,14 @@ Only aligned 32-bit writes are treated as “atomic enough” for control words.
 1. Ensure space in the current data sector:
    * If the current sector is full:
      * If no free data sectors remain:
+       * Mark active slot as old
        * Switch meta slots: erase and initialize the inactive meta (see Formatting steps 2–3). This begins a new cycle.
      * Erase the next free data sector.
      * Mark the sector used in the active meta bitmap (program `CHRON_SEC_STARTED` bit to 0).
 2. Begin record: program to 0 the per-record bit for `persisting_started`. If the record should be synced later, also program `should_sync` to 0 here.
 3. Write payload bytes (record body).
 4. Finish record: program `persisting_finished` to 0.
-5. Optional sync marking: after external sync completes, program `synced` to 0. When an entire sector’s records have `synced=0` where required, you may program the sector’s `CHRON_SEC_SYNCED` bit in the meta bitmap to 0.
+5. Optional sync handling: if the entry is marked `should_sync` and a sync callback is registered via `Chronicler::set_sync_callback`, the callback runs immediately with the entry bytes. After external sync completes, program `synced` to 0. When an entire sector’s records have `synced=0` where required, you may decide to program the sector’s `CHRON_SEC_SYNCED` bit in the meta bitmap to 0; `Chronicler::sweep_synced_sector` implements this lazily (one sector per call) so you can treat it like a lightweight GC.
 
 ## Notes and Invariants
 
@@ -123,4 +125,3 @@ Only aligned 32-bit writes are treated as “atomic enough” for control words.
 * Only 32-bit aligned control writes are used for headers and flag transitions to minimize torn-write windows.
 * Erases are the only way to return bits to 1; plan sector lifetimes accordingly.
 * The active meta is always the one whose bitmap most plausibly reflects the latest allocation state (per Loading rules).
-

@@ -1,0 +1,8 @@
+dependencies:
+  idf:
+    version: ">=5.4.0"
+
+  haberturdeur/exceptions:
+    git: https://github.com/haberturdeur/bricks.git
+    path: exceptions
+
