@@ -22,6 +22,8 @@
 #include <future>
 #include <span>
 #include <compare>
+#include <optional>
+#include <vector>
 
 namespace bricks::disnet {
 
@@ -104,7 +106,7 @@ struct [[gnu::packed]] Header {
     std::uint8_t ttl;
     std::uint8_t channel;
     std::uint8_t target_count = 0;
-    MacAddress [[gnu::counted_by(target_count)]] targets[];
+    MacAddress targets[];
 
     bool operator==(const Header& o) const = default;
 
@@ -190,10 +192,16 @@ inline std::uint8_t g_default_ttl = 15;
 class Channel {
 private:
     const std::uint8_t _channel;
+    std::uint8_t _default_ttl;
 
 public:
     Channel(std::uint8_t channel)
-        : _channel(channel) {
+        : _channel(channel), _default_ttl(g_default_ttl) {
+    }
+
+    Channel(std::uint8_t channel, std::uint8_t default_ttl)
+        : _channel(channel), _default_ttl(default_ttl) {
+        g_default_ttl = default_ttl;
     }
 
     void on(Callback&& cb) {
@@ -217,11 +225,11 @@ public:
     }
 
     void send_heartbeat(std::uint8_t ttl = g_default_ttl) {
-        bricks::disnet::send_heartbeat(_channel, ttl); 
+        bricks::disnet::send_heartbeat(_channel, ttl);
     }
 
     void ensure_heartbeat(TimePoint cutoff, std::uint8_t ttl = g_default_ttl) {
-        bricks::disnet::ensure_heartbeat(_channel, ttl, cutoff); 
+        bricks::disnet::ensure_heartbeat(_channel, ttl, cutoff);
     }
 
     void ensure_heartbeat(std::chrono::milliseconds cutoff, std::uint8_t ttl = g_default_ttl) {
@@ -238,4 +246,3 @@ public:
 };
 
 } // namespace bricks::disnet
-

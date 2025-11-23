@@ -1,0 +1,10 @@
+menu "Disnet Example"
+
+config DISNET_PEER_MAC
+    string "Peer MAC address (target for segmented send)"
+    default "80:65:99:93:11:50"
+    help
+        MAC address of the peer device to receive the segmented message.
+        Format: XX:XX:XX:XX:XX:XX
+
+endmenu

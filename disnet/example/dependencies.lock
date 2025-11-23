@@ -39,5 +39,5 @@ direct_dependencies:
 - haberturdeur/glaze
 - idf
 manifest_hash: 3034a5d49320c939ea12b9a8048a4a6009114c9159e0647ed18955cae1b433c2
-target: esp32s3
+target: esp32c3
 version: 2.0.0

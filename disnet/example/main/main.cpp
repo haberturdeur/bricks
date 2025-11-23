@@ -15,6 +15,8 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
+#include <mutex>
 
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -60,6 +62,23 @@ static void network_task(void*) {
     }
 }
 
+static std::optional<disnet::MacAddress> read_peer_mac() {
+#ifdef CONFIG_DISNET_PEER_MAC
+    disnet::MacAddress mac{};
+    unsigned int b[6] = {0};
+    int parsed = std::sscanf(CONFIG_DISNET_PEER_MAC, "%02x:%02x:%02x:%02x:%02x:%02x",
+                             &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]);
+    if (parsed != 6) {
+        ESP_LOGE(TAG, "Failed to parse CONFIG_DISNET_PEER_MAC='%s'", CONFIG_DISNET_PEER_MAC);
+        return std::nullopt;
+    }
+    for (int i = 0; i < 6; ++i) mac._data[i] = static_cast<std::uint8_t>(b[i]);
+    return mac;
+#else
+    return std::nullopt;
+#endif
+}
+
 extern "C" void app_main(void) {
     bricks::exceptions::setup_handler();
     esp_err_t ret = nvs_flash_init();
@@ -79,7 +98,10 @@ extern "C" void app_main(void) {
 
     disnet::Channel chan(APP_CHAN, /*starting_ttl*/ 15);
 
-    chan.on([](const disnet::MacAddress& source, std::span<const std::uint8_t> payload) {
+    static std::set<disnet::MacAddress> peers;
+    static std::mutex peers_mutex;
+
+    chan.on([&](const disnet::MacAddress& source, std::span<const std::uint8_t> payload) {
         ESP_LOGI(TAG, "Received a message on channle 42: src=%s size=%u",
                  mac_to_str(source).c_str(),
                  (unsigned)payload.size());
@@ -88,9 +110,42 @@ extern "C" void app_main(void) {
             std::string s(reinterpret_cast<const char*>(payload.data()), payload.size());
             ESP_LOGI(TAG, "Payload: %s", s.c_str());
         }
+
+        {
+            std::scoped_lock lk(peers_mutex);
+            if (peers.insert(source).second) {
+                ESP_LOGI(TAG, "Learned peer: %s", mac_to_str(source).c_str());
+            }
+        }
     });
 
     xTaskCreate(network_task, "net_loop", 4096, nullptr, 5, nullptr);
+
+    // Allow a short discovery window to collect peers that talk to us.
+    ESP_LOGI(TAG, "Discovery window: listening for peers for 5s...");
+    const std::string ping = "disnet: discovery ping";
+    for (int i = 0; i < 5; ++i) {
+        disnet::send_heartbeat(APP_CHAN, /*ttl*/ 5);
+        chan.broadcast_raw(std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(ping.data()), ping.size()), /*ttl*/ 5);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Merge neighbours observed via heartbeats.
+        auto neigh = disnet::neighbours(APP_CHAN);
+        if (!neigh.empty()) {
+            std::scoped_lock lk(peers_mutex);
+            for (const auto& [mac, _] : neigh) peers.insert(mac);
+        }
+    }
+
+    std::set<disnet::MacAddress> targets;
+    {
+        std::scoped_lock lk(peers_mutex);
+        targets = peers;
+    }
+    if (targets.empty()) {
+        ESP_LOGW(TAG, "No peers discovered. Aborting segmented send.");
+        return;
+    }
 
     std::string banner = "Hello from SEGMENTED broadcast!\n";
     std::vector<uint8_t> big;
@@ -98,9 +153,8 @@ extern "C" void app_main(void) {
     for (int i = 0; i < big.capacity() / banner.size(); ++i) {
         big.insert(big.end(), banner.begin(), banner.end());
     }
-    std::set<disnet::MacAddress> none {{0xEC, 0xDA, 0x3B, 0x5B, 0xAB, 0x64}}; // broadcast
-    ESP_LOGI(TAG, "Sending segmented (%u bytes)", (unsigned)big.size());
-    auto promise = chan.send_segmented(none, std::span<const uint8_t>(big.data(), big.size()));
+    ESP_LOGI(TAG, "Sending segmented (%u bytes) to %zu discovered peer(s)", (unsigned)big.size(), targets.size());
+    auto promise = chan.send_segmented(targets, std::span<const uint8_t>(big.data(), big.size()));
 
     promise.wait();
 
@@ -110,4 +164,3 @@ extern "C" void app_main(void) {
         vTaskDelay(pdMS_TO_TICKS(1500));
     }
 }
-
