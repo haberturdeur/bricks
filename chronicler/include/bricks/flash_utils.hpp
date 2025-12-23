@@ -6,12 +6,14 @@
 #include <spi_flash_mmap.h>
 
 #include <sys/types.h>
+#include <array>
 #include <memory>
 #include <span>
 #include <cstdint>
 #include <cassert>
 #include <cstddef>
 #include <cstdio>
+#include <cstring>
 
 namespace bricks::chronicler {
 
@@ -19,7 +21,33 @@ class PartitionHandle {
 private:
     const esp_partition_t* m_partition;
 
+    void _write_bytes(std::size_t start, const std::uint8_t* data, std::size_t size) {
+#ifdef BRICKS_CHRONICLER_TESTING
+        std::size_t to_write = size;
+        bool skip = false;
+        if (s_write_hook) {
+            const WriteHookResult res = s_write_hook(start, size, s_write_ctx);
+            skip = res.skip;
+            to_write = res.bytes_to_write < size ? res.bytes_to_write : size;
+        }
+        if (skip || to_write == 0)
+            return;
+        ESP_ERROR_CHECK(esp_partition_write(m_partition, start, data, to_write));
+#else
+        ESP_ERROR_CHECK(esp_partition_write(m_partition, start, data, size));
+#endif
+    }
+
 public:
+#ifdef BRICKS_CHRONICLER_TESTING
+    struct WriteHookResult {
+        std::size_t bytes_to_write;
+        bool skip;
+    };
+
+    using WriteHook = WriteHookResult(*)(std::size_t start, std::size_t size, void* ctx);
+#endif
+
     PartitionHandle(const esp_partition_t* partition)
         : m_partition(partition) {}
 
@@ -34,11 +62,13 @@ public:
     }
 
     void write(std::size_t start, std::span<const std::uint8_t> buf) {
-        ESP_ERROR_CHECK(esp_partition_write(m_partition, start, buf.data(), buf.size()));
+        _write_bytes(start, buf.data(), buf.size());
     }
 
     void write(std::size_t start, std::uint32_t val) {
-        ESP_ERROR_CHECK(esp_partition_write(m_partition, start, &val, 4));
+        std::array<std::uint8_t, 4> bytes{};
+        std::memcpy(bytes.data(), &val, bytes.size());
+        _write_bytes(start, bytes.data(), bytes.size());
     }
 
     void erase_range(std::size_t start, std::size_t size) {
@@ -63,6 +93,21 @@ public:
     const char*                 label() const noexcept { return m_partition->label;      }
     bool                    encrypted() const noexcept { return m_partition->encrypted;  }
     bool                    read_only() const noexcept { return m_partition->readonly;   }
+
+#ifdef BRICKS_CHRONICLER_TESTING
+    static inline WriteHook s_write_hook = nullptr;
+    static inline void* s_write_ctx = nullptr;
+
+    static void set_write_hook(WriteHook hook, void* ctx) {
+        s_write_hook = hook;
+        s_write_ctx = ctx;
+    }
+
+    static void clear_write_hook() {
+        s_write_hook = nullptr;
+        s_write_ctx = nullptr;
+    }
+#endif
 
     PartitionHandle(const PartitionHandle&) = default;
     PartitionHandle& operator=(const PartitionHandle&) = default;
