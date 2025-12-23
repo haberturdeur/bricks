@@ -4,4 +4,4 @@ dependencies:
   rapidcheck:
     path: ../components/rapidcheck
   haberturdeur/exceptions:
-    path: ../managed_components/haberturdeur__exceptions
+    path: ../../../exceptions

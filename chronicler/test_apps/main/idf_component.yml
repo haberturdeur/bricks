@@ -3,5 +3,5 @@ dependencies:
     version: ">=5.4.0"
 
   haberturdeur/chronicler:
-    override_path: ../../
+    override_path: ../..
 
