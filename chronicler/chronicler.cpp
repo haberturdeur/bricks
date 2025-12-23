@@ -23,7 +23,24 @@ std::optional<Chronicler> Chronicler::load(PartitionHandle partition, std::size_
 
     detail::DataSector active = detail::DataSector::load(geometry, partition, metadata->head());
 
-    return Chronicler(geometry, partition, std::move(*metadata), std::move(active));
+    Chronicler out(geometry, partition, std::move(*metadata), std::move(active));
+    if (out.m_geometry.data_sector_count > 0 && out.m_metadata.has_wrapped()) {
+        std::size_t total = 0;
+        for (auto sector_idx : collect_used_sector_indices(out.m_metadata, out.m_geometry)) {
+            if (sector_idx == out.m_metadata.head())
+                total += out.m_active_sector->size();
+            else {
+                detail::DataSector sector = detail::DataSector::load(out.m_geometry, out.m_partition, sector_idx);
+                total += sector.size();
+            }
+        }
+        const std::size_t full_sectors = out.m_geometry.data_sector_count - 1;
+        const std::size_t expected = full_sectors * out.m_geometry.sector_capacity
+                                   + out.m_active_sector->size();
+        if (total != expected)
+            return std::nullopt;
+    }
+    return out;
 }
 
 Chronicler Chronicler::create(PartitionHandle partition, std::size_t entry_size) {
@@ -47,7 +64,7 @@ Chronicler Chronicler::load_or_create(PartitionHandle partition, std::size_t ent
 void Chronicler::push(std::span<std::uint8_t> data, bool should_sync) {
     assert(data.size() == m_geometry.entry_size);
 
-    if (m_active_sector->size() == m_active_sector->capacity()) {
+    if (m_active_sector->sealed() || m_active_sector->size() == m_active_sector->capacity()) {
         m_metadata.advance_head();
         m_active_sector.emplace(detail::DataSector::create(m_geometry, m_partition, m_metadata.head()));
     }
@@ -171,6 +188,13 @@ void Chronicler::set_sync_callback(SyncCallback callback, void* ctx) {
 }
 
 std::size_t Chronicler::size() const {
+    if (m_geometry.data_sector_count == 0)
+        return 0;
+    if (m_metadata.has_wrapped()) {
+        const std::size_t full_sectors = m_geometry.data_sector_count - 1;
+        return full_sectors * m_geometry.sector_capacity + m_active_sector->size();
+    }
+
     std::size_t total = 0;
     for (auto sector_idx : collect_used_sector_indices(m_metadata, m_geometry)) {
         if (sector_idx == m_metadata.head())

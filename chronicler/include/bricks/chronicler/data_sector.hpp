@@ -24,6 +24,7 @@ private:
     SectorHandle m_sector;
     Cache m_cache;
     std::size_t m_size = 0;
+    bool m_sealed = false;
 
     std::size_t _data_start_relative(std::size_t entry_idx) const {
         return m_geometry.data_offset + entry_idx * m_geometry.entry_size;
@@ -76,8 +77,10 @@ private:
     void _load() {
         m_cache.load();
         for (std::size_t i = 0; i < capacity(); i++) {
-            if (!(_read_flags(i) & Started)) {
+            const std::uint8_t flags = _read_flags(i);
+            if (!(flags & Started) || !(flags & Finished)) {
                 m_size = i;
+                m_sealed = (flags & Started) && !(flags & Finished);
                 return;
             }
         }
@@ -88,6 +91,7 @@ private:
         m_sector.erase();
         m_cache.load_erased();
         m_size = 0;
+        m_sealed = false;
     }
 
 public:
@@ -110,6 +114,7 @@ public:
     }
 
     void push(std::span<std::uint8_t> data, bool should_sync) {
+        assert(!m_sealed);
         assert(m_size < m_geometry.sector_capacity);
         _start_push(m_size, should_sync);
         _write_payload(m_size, data);
@@ -125,6 +130,7 @@ public:
     std::size_t capacity() const { return m_geometry.sector_capacity; }
     std::size_t size() const { return m_size; }
     std::size_t idx() const { return m_idx; }
+    bool sealed() const { return m_sealed; }
 
     bool should_sync(std::size_t idx) const {
         assert(idx < m_size);
