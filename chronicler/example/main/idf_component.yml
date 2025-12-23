@@ -4,4 +4,3 @@ dependencies:
 
   haberturdeur/chronicler:
     override_path: ../../
-

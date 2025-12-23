@@ -1,26 +1,12 @@
-# Chronicler Example (C)
+# Chronicler Usage Example
 
-Small ESP-IDF app that drives the `bricks_chronicler` C API end-to-end
-against the first `ESP_PARTITION_TYPE_DATA` partition discovered on the target.
-All verification happens on-device via logging; no host interaction required.
+Small ESP-IDF app that demonstrates how to use the `bricks_chronicler` C++ API
+in a normal firmware. It finds a writable data partition (preferring the
+`storage` label), appends a few structured entries, logs them back out, and then
+marks sync-required entries as synced.
 
-## Test flow
-
-1. **Partition lookup** – resolves the data partition and aborts early if not found.
-2. **Fresh chronicler** – formats the partition via `bricks_chronicler_create`
-   for an entry size (first 4 bytes, then 200 bytes) and registers a sync-request
-   callback.
-3. **Push & wrap** – appends `capacity + 32` sequential payloads (every third
-   entry marked `should_sync`). Confirms reported size equals the expected number
-   of retained entries after wrap, plus spot-checks oldest/newest/middle records.
-4. **Iterator check** – walks every stored entry with `bricks_chronicler_iter_*`
-   to ensure the iterator returns entries in order and matches the predicted values.
-5. **Sync bookkeeping** – reads all unsynced entries via
-   `bricks_chronicler_get_unsynced`, marks them synced, and verifies the count
-   drops to zero.
-6. **Dump & reload** – copies the entire log into RAM, destroys the handle,
-   re-opens it with `bricks_chronicler_load_or_create`, and byte-compares the
-   reloaded entries against the dump. Logs how many times the sync callback fired.
+The project uses `partitions.csv` to expose a `storage` data partition for the
+log.
 
 ## Building & running
 
@@ -29,5 +15,5 @@ idf.py -C example set-target esp32   # or other target
 idf.py -C example flash monitor
 ```
 
-Ensure your partition table exposes a writable data partition large enough
-for the chronicler metadata plus several data sectors.
+Watch the monitor output to see entries being appended, replayed, and marked
+synced.

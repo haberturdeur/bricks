@@ -1,0 +1,29 @@
+dependencies:
+  haberturdeur/chronicler:
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    - name: haberturdeur/exceptions
+      path: test_apps/managed_components/haberturdeur__exceptions
+    source:
+      path: /home/tom/Projects/bricks/chronicler
+      type: local
+    version: '*'
+  haberturdeur/exceptions:
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    source:
+      path: /home/tom/Projects/bricks/chronicler/test_apps/managed_components/haberturdeur__exceptions
+      type: local
+    version: '*'
+  idf:
+    source:
+      type: idf
+    version: 5.5.1
+direct_dependencies:
+- haberturdeur/chronicler
+- idf
+manifest_hash: 9ac1c9928218458b4b3ea69d7484168fb505f874ec7731fadd62d71005eb66a6
+target: esp32
+version: 2.0.0
