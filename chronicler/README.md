@@ -125,3 +125,8 @@ Only aligned 32-bit writes are treated as “atomic enough” for control words.
 * Only 32-bit aligned control writes are used for headers and flag transitions to minimize torn-write windows.
 * Erases are the only way to return bits to 1; plan sector lifetimes accordingly.
 * The active meta is always the one whose bitmap most plausibly reflects the latest allocation state (per Loading rules).
+
+## ESP-IDF Apps
+
+* `example/` – minimal usage demo that appends, reads back, and syncs entries. Run with `idf.py -C example flash monitor`.
+* `test_apps/` – Unity-based integration tests for the component. Run with `idf.py -C test_apps flash monitor`.

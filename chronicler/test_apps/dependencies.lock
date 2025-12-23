@@ -1,0 +1,32 @@
+dependencies:
+  haberturdeur/chronicler:
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    - git: https://github.com/haberturdeur/bricks.git
+      name: haberturdeur/exceptions
+      path: exceptions
+    source:
+      path: /home/tom/Projects/bricks/chronicler
+      type: local
+    version: '*'
+  haberturdeur/exceptions:
+    component_hash: e71f3fde985e8168eaa737d37460bcf62615544a2df8a72fcdfd090d73adc7d6
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    source:
+      git: https://github.com/haberturdeur/bricks.git
+      path: exceptions
+      type: git
+    version: d1bfb964b6a983a10afdb036d37090df8764cd7b
+  idf:
+    source:
+      type: idf
+    version: 5.5.1
+direct_dependencies:
+- haberturdeur/chronicler
+- idf
+manifest_hash: 9ac1c9928218458b4b3ea69d7484168fb505f874ec7731fadd62d71005eb66a6
+target: linux
+version: 2.0.0
