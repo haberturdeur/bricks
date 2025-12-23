@@ -43,8 +43,7 @@ public:
             return std::nullopt;
         MetadataSector out(geometry, sector);
         out.m_old = sector.read(layout::g_old) == 0;
-        if (!out.m_old)
-            out.bitmap().load();
+        out.bitmap().load();
         return out;
     }
 
@@ -85,8 +84,10 @@ private:
 
     void _switch_slot() {
         const std::size_t previous_slot = m_active_slot;
-        if (m_slots[previous_slot])
+        if (m_slots[previous_slot]) {
             m_slots[previous_slot]->mark_old();
+            m_slots[previous_slot]->bitmap().mark_all_full_and_synced();
+        }
         m_active_slot = (m_active_slot + 1) % 2;
         _active_slot().emplace(MetadataSector::create(m_geometry, m_partition, m_active_slot));
     }
@@ -98,16 +99,52 @@ private:
         if (initialized == 0)
             return false;
         if (initialized == 0b11) {
+            const auto pattern0 = m_slots[0]->bitmap().pattern();
+            const auto pattern1 = m_slots[1]->bitmap().pattern();
+            const auto is_partial = [](Bitmap::Pattern pattern) {
+                return pattern == Bitmap::Pattern::Partial;
+            };
+
+            if (pattern0 == Bitmap::Pattern::AllOnes && is_partial(pattern1)) {
+                m_active_slot = 1;
+                return true;
+            }
+            if (pattern1 == Bitmap::Pattern::AllOnes && is_partial(pattern0)) {
+                m_active_slot = 0;
+                return true;
+            }
+            if (pattern0 == Bitmap::Pattern::AllZeros && is_partial(pattern1)) {
+                m_active_slot = 1;
+                return true;
+            }
+            if (pattern1 == Bitmap::Pattern::AllZeros && is_partial(pattern0)) {
+                m_active_slot = 0;
+                return true;
+            }
+            if (pattern0 == Bitmap::Pattern::AllOnes && pattern1 == Bitmap::Pattern::AllOnes) {
+                m_active_slot = 0;
+                return true;
+            }
+            if (pattern0 == Bitmap::Pattern::AllZeros && pattern1 == Bitmap::Pattern::AllZeros) {
+                m_active_slot = 0;
+                return true;
+            }
             const bool slot0_old = m_slots[0]->is_old();
             const bool slot1_old = m_slots[1]->is_old();
-            if (slot0_old == slot1_old)
-                return false;
-            m_active_slot = slot0_old ? 1 : 0;
+            if (slot0_old != slot1_old) {
+                m_active_slot = slot0_old ? 1 : 0;
+                return true;
+            }
+            const std::size_t used0 = m_slots[0]->bitmap().count_used();
+            const std::size_t used1 = m_slots[1]->bitmap().count_used();
+            if (used0 != used1) {
+                m_active_slot = used0 > used1 ? 0 : 1;
+                return true;
+            }
+            m_active_slot = 0;
             return true;
         }
         m_active_slot = initialized >> 1;
-        if (_active_slot()->is_old())
-            _switch_slot();
         return true;
     }
 
@@ -129,7 +166,8 @@ public:
         Metadata out(geometry, partition);
         if (!out._choose_slot())
             return std::nullopt;
-        out._active_slot()->bitmap().load();
+        if (out._active_slot()->bitmap().empty())
+            out.advance_head();
         return out;
     }
 
@@ -156,12 +194,26 @@ public:
             _switch_slot();
         _active_slot()->bitmap().advance_head();
     }
+
+    bool has_wrapped() const {
+        if (!m_slots[0] || !m_slots[1])
+            return false;
+        const std::size_t other_slot = (m_active_slot + 1) % 2;
+        return m_slots[other_slot]->bitmap().pattern() == Bitmap::Pattern::AllZeros;
+    }
 };
 
 inline std::vector<std::size_t> collect_used_sector_indices(const Metadata& metadata, const Geometry& geometry) {
     std::vector<std::size_t> indices;
     if (geometry.data_sector_count == 0)
         return indices;
+    if (metadata.has_wrapped()) {
+        indices.reserve(geometry.data_sector_count);
+        const std::size_t head = metadata.head();
+        for (std::size_t i = 1; i <= geometry.data_sector_count; ++i)
+            indices.push_back((head + i) % geometry.data_sector_count);
+        return indices;
+    }
     const std::size_t head = metadata.head();
     if (!metadata.is_sector_used(head))
         return indices;
