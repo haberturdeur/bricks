@@ -14,6 +14,12 @@ public:
         FullAndSynced = 1U << 1,
     };
 
+    enum class Pattern : uint8_t {
+        AllOnes,
+        AllZeros,
+        Partial,
+    };
+
 private:
     Geometry m_geometry;
     SectorHandle m_sector;
@@ -23,14 +29,14 @@ private:
     uint8_t _read_flags(std::size_t idx) const {
         uint8_t flags = m_cache.read(idx / 4);
         flags = ~flags;
-        flags >>= idx % 4;
+        flags >>= (idx % 4) * 2;
         flags &= 0b11;
         return flags;
     }
 
     void _mark_flags(std::size_t idx, std::uint8_t flags) {
         flags &= 0b11;
-        flags <<= (idx % 4);
+        flags <<= (idx % 4) * 2;
         flags = ~flags;
         m_cache.write(idx / 4, flags);
     }
@@ -77,6 +83,41 @@ public:
 
     bool is_full_and_synced(std::size_t idx) const { return _read_flags(idx) & FullAndSynced; }
     void mark_full_and_synced(std::size_t idx) { _mark_flags(idx, FullAndSynced); }
+
+    std::size_t count_used() const {
+        std::size_t count = 0;
+        for (std::size_t i = 0; i < m_geometry.data_sector_count; ++i)
+            count += is_used(i) ? 1U : 0U;
+        return count;
+    }
+
+    Pattern pattern() const {
+        const std::size_t size = m_geometry.data_sector_count / 4;
+        bool all_ones = true;
+        bool all_zeros = true;
+        for (std::size_t i = 0; i < size; ++i) {
+            const std::uint8_t val = m_cache.read(i);
+            all_ones &= (val == 0xFF);
+            all_zeros &= (val == 0x00);
+            if (!all_ones && !all_zeros)
+                return Pattern::Partial;
+        }
+        if (all_ones)
+            return Pattern::AllOnes;
+        if (all_zeros)
+            return Pattern::AllZeros;
+        return Pattern::Partial;
+    }
+
+    void mark_all_full_and_synced() {
+        const std::size_t size = m_geometry.data_sector_count / 4;
+        for (std::size_t i = 0; i < size; ++i)
+            m_cache.write(i, 0x00);
+        if (m_geometry.data_sector_count == 0)
+            m_head = std::nullopt;
+        else
+            m_head = m_geometry.data_sector_count - 1;
+    }
 
     bool empty() const { return !m_head; }
     bool all_used() const { return m_head && (*m_head + 1) >= m_geometry.data_sector_count; }
