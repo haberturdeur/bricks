@@ -3,8 +3,9 @@ dependencies:
     dependencies:
     - name: idf
       version: '>=5.4.0'
-    - name: haberturdeur/exceptions
-      path: test_apps/managed_components/haberturdeur__exceptions
+    - git: https://github.com/haberturdeur/bricks.git
+      name: haberturdeur/exceptions
+      path: exceptions
     source:
       path: /home/tom/Projects/bricks/chronicler
       type: local
@@ -14,7 +15,7 @@ dependencies:
     - name: idf
       version: '>=5.4.0'
     source:
-      path: /home/tom/Projects/bricks/chronicler/host_test/managed_components/haberturdeur__exceptions
+      path: /home/tom/Projects/bricks/exceptions
       type: local
     version: '*'
   idf:
@@ -31,6 +32,6 @@ direct_dependencies:
 - chronicler
 - haberturdeur/exceptions
 - rapidcheck
-manifest_hash: aae5df80f92de2cfcb8310e1678a42384886caf9c49c430b10d1edc2b0f3e730
+manifest_hash: bc1ad9e387f563236a53baa366690823236f22b8a1cdb595bd24dafad4936bfa
 target: linux
 version: 2.0.0

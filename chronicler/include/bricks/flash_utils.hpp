@@ -55,6 +55,12 @@ public:
         ESP_ERROR_CHECK(esp_partition_read(m_partition, start, buf.data(), buf.size()));
     }
 
+    std::uint8_t read_byte(std::size_t start) const {
+        std::uint8_t val{};
+        ESP_ERROR_CHECK(esp_partition_read(m_partition, start, &val, 1));
+        return val;
+    }
+
     uint32_t read(std::size_t start) const {
         std::uint32_t val;
         ESP_ERROR_CHECK(esp_partition_read(m_partition, start, &val, 4));
@@ -63,6 +69,10 @@ public:
 
     void write(std::size_t start, std::span<const std::uint8_t> buf) {
         _write_bytes(start, buf.data(), buf.size());
+    }
+
+    void write_byte(std::size_t start, std::uint8_t val) {
+        _write_bytes(start, &val, 1);
     }
 
     void write(std::size_t start, std::uint32_t val) {
@@ -136,6 +146,11 @@ public:
         m_partition.read(m_start + start, buf);
     }
 
+    std::uint8_t read_byte(std::size_t start) const {
+        assert(start + 1 <= m_partition.sector_size());
+        return m_partition.read_byte(m_start + start);
+    }
+
     std::uint32_t read(std::size_t start) const {
         assert(start + 4 <= m_partition.sector_size()); 
         return m_partition.read(m_start + start);
@@ -144,6 +159,11 @@ public:
     void write(std::size_t start, std::span<const std::uint8_t> buf) {
         assert(start + buf.size() <= m_partition.sector_size()); 
         m_partition.write(m_start + start, buf);
+    }
+
+    void write_byte(std::size_t start, std::uint8_t val) {
+        assert(start + 1 <= m_partition.sector_size());
+        m_partition.write_byte(m_start + start, val);
     }
 
     void write(std::size_t idx, std::uint32_t val) {
@@ -186,13 +206,14 @@ public:
         : m_sector(sector)
         , m_start(start)
         , m_size(size) {
-        assert(start % 4 == 0);
-        assert(size % 4 == 0);
     }
 
     void load() {
         if (!m_cache)
             _alloc();
+
+        if (m_size == 0)
+            return;
 
         m_sector.read(m_start, { m_cache.get(), m_size });
     }
@@ -205,6 +226,9 @@ public:
         if (!m_cache)
             _alloc();
 
+        if (m_size == 0)
+            return;
+
         std::span<std::uint8_t> cache = { m_cache.get(), m_size };
         for (auto& e : cache)
             e = 0xFF;
@@ -214,20 +238,11 @@ public:
         if (m_cache)
             return m_cache[idx];
 
-        std::uint32_t data = m_sector.read(idx - (idx % 4));
-
-        return data >> (8 * (idx % 4));
+        return m_sector.read_byte(m_start + idx);
     }
 
     void write(std::size_t idx, std::uint8_t val) {
-        const std::size_t shift = 8 * (idx % 4);
-        std::uint32_t data = 0xFFFFFFFF;
-        data &= ~(0xFFu << shift);
-        data |= static_cast<std::uint32_t>(val) << shift;
-
-        const std::size_t addr = idx - (idx % 4);
-
-        m_sector.write(m_start + addr, data);
+        m_sector.write_byte(m_start + idx, val);
 
         if (m_cache)
             m_cache[idx] &= val;

@@ -1,5 +1,7 @@
 #include <bricks/chronicler.hpp>
+#include <bricks/chronicler/data_sector.hpp>
 #include <bricks/chronicler/geometry.hpp>
+#include <bricks/chronicler/metadata.hpp>
 
 #include <esp_err.h>
 #include <esp_partition.h>
@@ -28,12 +30,33 @@ using namespace bricks::chronicler;
 
 namespace {
 
-constexpr char kPartitionLabel[] = "storage";
-constexpr std::size_t kFlashBytes = 4 * 1024 * 1024;
+constexpr char partition_label[] = "storage";
+constexpr std::size_t flash_bytes = 4 * 1024 * 1024;
+constexpr std::uint8_t session_id = 0x01;
+constexpr bool dispose_other_sessions = false;
 
 void fill_entry(std::vector<std::uint8_t>& buf, std::uint32_t seed) {
     for (std::size_t i = 0; i < buf.size(); ++i)
         buf[i] = static_cast<std::uint8_t>((seed + i * 17U) & 0xFFU);
+}
+
+std::vector<std::uint8_t> make_all_ones_bitmap(const detail::Geometry& geom) {
+    const std::size_t size = (geom.data_sector_count + 1U) / 2U;
+    return std::vector<std::uint8_t>(size, 0xFF);
+}
+
+void write_metadata_slot(SectorHandle& slot,
+                         const std::vector<std::uint8_t>& bitmap_bytes,
+                         bool old_flag) {
+    slot.erase();
+    slot.write(detail::layout::g_magic, detail::g_magic);
+    slot.write(detail::layout::g_version, detail::g_version);
+    slot.write_byte(detail::layout::g_initialized, 0x00);
+    if (old_flag)
+        slot.write_byte(detail::layout::g_old, 0x00);
+    if (!bitmap_bytes.empty())
+        slot.write(detail::layout::g_bitmap,
+                   std::span<const std::uint8_t>(bitmap_bytes.data(), bitmap_bytes.size()));
 }
 
 std::string partition_table_path() {
@@ -124,13 +147,13 @@ PartitionHandle prepare_partition() {
     // Use a flash image outside /tmp to avoid SIGBUS when tmpfs space is tight.
     esp_partition_file_mmap_ctrl_t* ctrl = esp_partition_get_file_mmap_ctrl_input();
     *ctrl = esp_partition_file_mmap_ctrl_t{};
-    const std::string flash_path = create_flash_image(kFlashBytes);
+    const std::string flash_path = create_flash_image(flash_bytes);
     std::strncpy(ctrl->flash_file_name, flash_path.c_str(), sizeof(ctrl->flash_file_name) - 1);
     ctrl->flash_file_name[sizeof(ctrl->flash_file_name) - 1] = '\0';
     ctrl->remove_dump = true;
 
     const esp_partition_t* part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, kPartitionLabel);
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, partition_label);
     if (!part)
         part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, nullptr);
 
@@ -167,11 +190,12 @@ struct Model {
 struct Sut {
     PartitionHandle partition;
     detail::Geometry geom;
+    std::size_t entry_size{};
     std::optional<Chronicler> chron;
 };
 
 std::size_t entry_size(const Sut& sut) {
-    return static_cast<std::size_t>(sut.geom.entry_size);
+    return sut.entry_size;
 }
 
 struct SyncCallbackContext {
@@ -180,11 +204,10 @@ struct SyncCallbackContext {
 };
 
 struct PartialWriteContext {
-    std::size_t flags_addr{};
+    std::size_t crc_addr{};
     std::size_t payload_addr{};
     std::size_t payload_size{};
     std::size_t payload_written{};
-    int flag_writes{};
     bool truncated_payload{};
 };
 
@@ -201,15 +224,12 @@ PartitionHandle::WriteHookResult partial_write_hook(std::size_t start,
         info->payload_written = size / 2;
         return {info->payload_written, false};
     }
-    if (start == info->flags_addr && size == 4) {
-        info->flag_writes++;
-        if (info->flag_writes == 2)
-            return {0, true};
-    }
+    if (start == info->crc_addr && size == 1)
+        return {0, true};
     return {size, false};
 }
 
-void sync_callback(Chronicler& chron, std::span<std::uint8_t>, void* ctx) {
+void sync_callback(Chronicler& chron, std::span<const std::uint8_t>, void* ctx) {
     auto* info = static_cast<SyncCallbackContext*>(ctx);
     if (!info || info->idx >= info->decisions.size())
         return;
@@ -265,18 +285,20 @@ public:
             push_into_model(expected, seed, false);
 
         if (!sut.chron)
-            sut.chron.emplace(Chronicler::create(sut.partition, entry_size(sut)));
+            sut.chron.emplace(Chronicler::create(sut.partition, session_id, dispose_other_sessions));
         std::vector<std::uint8_t> payload(entry_size(sut));
         for (auto seed : m_seeds) {
             fill_entry(payload, seed);
-            sut.chron->push(std::span<std::uint8_t>(payload.data(), payload.size()), false);
+            sut.chron->push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
         }
         RC_ASSERT(sut.chron->size() == expected.expected_size());
 
         std::vector<std::uint8_t> read_buf(entry_size(sut));
         std::vector<std::uint8_t> expected_payload(entry_size(sut));
         for (std::size_t i = 0; i < expected.entries.size(); ++i) {
-            sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            const std::size_t bytes =
+                sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            RC_ASSERT(bytes == entry_size(sut));
             fill_entry(expected_payload, expected.entries[i].seed);
             RC_ASSERT(std::equal(read_buf.begin(), read_buf.end(), expected_payload.begin(), expected_payload.end()));
             if (expected.entries[i].should_sync)
@@ -301,7 +323,7 @@ public:
     void run(const Model& state, Sut& sut) const override {
         RC_PRE(sut.chron.has_value());
         sut.chron.reset();
-        auto loaded = Chronicler::load(sut.partition, entry_size(sut));
+        auto loaded = Chronicler::load(sut.partition, session_id, dispose_other_sessions);
         RC_ASSERT(loaded.has_value());
         sut.chron.emplace(std::move(*loaded));
 
@@ -310,7 +332,9 @@ public:
         std::vector<std::uint8_t> read_buf(entry_size(sut));
         std::vector<std::uint8_t> expected(entry_size(sut));
         for (std::size_t i = 0; i < state.entries.size(); ++i) {
-            sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            const std::size_t bytes =
+                sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            RC_ASSERT(bytes == entry_size(sut));
             fill_entry(expected, state.entries[i].seed);
             RC_ASSERT(std::equal(read_buf.begin(), read_buf.end(), expected.begin(), expected.end()));
             if (state.entries[i].should_sync)
@@ -368,12 +392,12 @@ public:
             push_into_model(expected, seed, sync);
 
         if (!sut.chron)
-            sut.chron.emplace(Chronicler::create(sut.partition, entry_size(sut)));
+            sut.chron.emplace(Chronicler::create(sut.partition, session_id, dispose_other_sessions));
 
         std::vector<std::uint8_t> payload(entry_size(sut));
         for (auto [seed, sync] : m_seeds_with_sync) {
             fill_entry(payload, seed);
-            sut.chron->push(std::span<std::uint8_t>(payload.data(), payload.size()), sync);
+            sut.chron->push(std::span<const std::uint8_t>(payload.data(), payload.size()), sync);
             if (!sync)
                 RC_ASSERT(sut.chron->is_synced(sut.chron->size() - 1));
         }
@@ -383,7 +407,9 @@ public:
         std::vector<std::uint8_t> read_buf(entry_size(sut));
         std::vector<std::uint8_t> expected_payload(entry_size(sut));
         for (std::size_t i = 0; i < expected.entries.size(); ++i) {
-            sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            const std::size_t bytes =
+                sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            RC_ASSERT(bytes == entry_size(sut));
             fill_entry(expected_payload, expected.entries[i].seed);
             RC_ASSERT(std::equal(read_buf.begin(), read_buf.end(), expected_payload.begin(), expected_payload.end()));
             if (expected.entries[i].should_sync)
@@ -433,7 +459,7 @@ public:
         Model expected = project_next(state, m_seeds_with_sync, m_decisions);
 
         if (!sut.chron)
-            sut.chron.emplace(Chronicler::create(sut.partition, entry_size(sut)));
+            sut.chron.emplace(Chronicler::create(sut.partition, session_id, dispose_other_sessions));
 
         SyncCallbackContext local_ctx = m_decisions;
         local_ctx.idx = 0;
@@ -442,7 +468,7 @@ public:
         std::vector<std::uint8_t> payload(entry_size(sut));
         for (auto [seed, sync] : m_seeds_with_sync) {
             fill_entry(payload, seed);
-            sut.chron->push(std::span<std::uint8_t>(payload.data(), payload.size()), sync);
+            sut.chron->push(std::span<const std::uint8_t>(payload.data(), payload.size()), sync);
         }
 
         RC_ASSERT(sut.chron->size() == expected.expected_size());
@@ -450,7 +476,9 @@ public:
         std::vector<std::uint8_t> read_buf(entry_size(sut));
         std::vector<std::uint8_t> expected_payload(entry_size(sut));
         for (std::size_t i = 0; i < expected.entries.size(); ++i) {
-            sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            const std::size_t bytes =
+                sut.chron->read(i, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
+            RC_ASSERT(bytes == entry_size(sut));
             fill_entry(expected_payload, expected.entries[i].seed);
             RC_ASSERT(std::equal(read_buf.begin(), read_buf.end(), expected_payload.begin(), expected_payload.end()));
             if (expected.entries[i].should_sync)
@@ -549,22 +577,31 @@ std::size_t pick_entry_size_biased_large() {
     return (*rc::gen::inRange<std::size_t>(64, 129)) * 4; // 256..512 bytes
 }
 
+std::size_t sector_capacity_for_entry(const detail::Geometry& geom, std::size_t entry_size_bytes) {
+    if (entry_size_bytes == 0 || geom.sector_size <= detail::Geometry::sector_header_size)
+        return 0;
+    const std::size_t available = geom.sector_size - detail::Geometry::sector_header_size;
+    const std::size_t record_bytes = detail::Geometry::record_overhead + entry_size_bytes;
+    return record_bytes == 0 ? 0 : (available / record_bytes);
+}
+
 TestContext make_context(std::size_t entry_size_bytes) {
     auto partition = prepare_partition();
-    detail::Geometry geom(entry_size_bytes, partition);
+    detail::Geometry geom(partition);
     RC_PRE(geom.data_sector_count > 0);
-    RC_PRE(geom.sector_capacity > 0);
-    const std::size_t capacity = geom.sector_capacity * geom.data_sector_count;
+    const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_size_bytes);
+    RC_PRE(sector_capacity > 0);
+    const std::size_t capacity = sector_capacity * geom.data_sector_count;
     RC_PRE(capacity > 0);
 
     Model model;
     model.capacity = capacity;
-    model.sector_capacity = geom.sector_capacity;
+    model.sector_capacity = sector_capacity;
     model.data_sector_count = geom.data_sector_count;
     model.head_size = 0;
     model.wrapped = false;
 
-    Sut sut{partition, geom, Chronicler::create(partition, entry_size_bytes)};
+    Sut sut{partition, geom, entry_size_bytes, Chronicler::create(partition, session_id, dispose_other_sessions)};
     return {std::move(model), std::move(sut)};
 }
 
@@ -579,52 +616,20 @@ extern "C" void app_main(void) {
               [] {
                   auto partition = prepare_partition();
                   const std::size_t entry_sz = pick_entry_size();
-                  detail::Geometry geom(entry_sz, partition);
+                  detail::Geometry geom(partition);
                   RC_PRE(geom.data_sector_count > 0);
 
-                  auto chron = Chronicler::create(partition, entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
                   std::vector<std::uint8_t> payload(entry_sz);
                   fill_entry(payload, 1);
-                  chron.push(std::span<std::uint8_t>(payload.data(), payload.size()), false);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
 
                   SectorHandle slot0(partition, 0);
                   SectorHandle slot1(partition, 1);
                   slot0.write(detail::layout::g_magic, 0U);
                   slot1.write(detail::layout::g_magic, 0U);
 
-                  auto loaded = Chronicler::load(partition, entry_sz);
-                  RC_ASSERT(!loaded.has_value());
-              });
-
-    rc::check("load fails when wrapped count mismatch detected",
-              [] {
-                  auto partition = prepare_partition();
-                  detail::Geometry geom(pick_entry_size(), partition);
-                  RC_PRE(geom.data_sector_count > 1);
-                  RC_PRE(geom.sector_capacity > 0);
-
-                  const std::size_t entry_sz = static_cast<std::size_t>(geom.entry_size);
-                  auto chron = Chronicler::create(partition, entry_sz);
-                  const std::size_t extra = std::min<std::size_t>(geom.sector_capacity, 5);
-                  RC_PRE(extra > 0);
-
-                  std::vector<std::uint8_t> payload(entry_sz);
-                  for (std::size_t i = 0; i < extra; ++i) {
-                      fill_entry(payload, static_cast<std::uint32_t>(i));
-                      chron.push(std::span<std::uint8_t>(payload.data(), payload.size()), false);
-                  }
-
-                  SectorHandle slot1(partition, 1);
-                  slot1.write(detail::layout::g_magic, detail::g_magic);
-                  slot1.write(detail::layout::g_version, detail::g_version);
-                  slot1.write(detail::layout::g_entry_size, geom.entry_size);
-                  slot1.write(detail::layout::g_initialized, 0U);
-
-                  const std::size_t bitmap_bytes = geom.data_sector_count / 4;
-                  for (std::size_t offset = 0; offset < bitmap_bytes; offset += 4)
-                      slot1.write(detail::layout::g_bitmap + offset, 0U);
-
-                  auto loaded = Chronicler::load(partition, entry_sz);
+                  auto loaded = Chronicler::load(partition, session_id, dispose_other_sessions);
                   RC_ASSERT(!loaded.has_value());
               });
 
@@ -632,13 +637,13 @@ extern "C" void app_main(void) {
               [] {
                   auto partition = prepare_partition();
                   const std::size_t entry_sz = pick_entry_size();
-                  detail::Geometry geom(entry_sz, partition);
+                  detail::Geometry geom(partition);
                   RC_PRE(geom.data_sector_count > 0);
 
-                  auto chron = Chronicler::create(partition, entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
                   std::vector<std::uint8_t> payload(entry_sz);
                   fill_entry(payload, 42);
-                  chron.push(std::span<std::uint8_t>(payload.data(), payload.size()), false);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
 
                   std::size_t word_offset = 0;
                   bool found = false;
@@ -654,7 +659,8 @@ extern "C" void app_main(void) {
                   RC_PRE(found);
 
                   SectorHandle sector(partition, geom.metadata_sector_count);
-                  const std::size_t addr = geom.data_offset + word_offset;
+                  const std::size_t addr =
+                      geom.data_offset + detail::Geometry::length_header_size + word_offset;
                   sector.write(addr, 0U);
 
                   std::vector<std::uint8_t> read_buf(entry_sz);
@@ -666,31 +672,32 @@ extern "C" void app_main(void) {
               [] {
                   auto partition = prepare_partition();
                   const std::size_t entry_sz = pick_entry_size();
-                  detail::Geometry geom(entry_sz, partition);
+                  detail::Geometry geom(partition);
                   RC_PRE(geom.data_sector_count > 1);
-                  RC_PRE(geom.sector_capacity > 0);
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
 
-                  auto chron = Chronicler::create(partition, entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
                   std::vector<std::uint8_t> payload(entry_sz);
                   fill_entry(payload, 123);
 
                   PartialWriteContext ctx;
                   const std::size_t sector_start =
                       geom.metadata_sector_count * partition.sector_size();
-                  ctx.flags_addr = sector_start;
-                  ctx.payload_addr = sector_start + geom.data_offset;
+                  ctx.crc_addr =
+                      sector_start + geom.data_offset + detail::Geometry::length_header_size + entry_sz;
+                  ctx.payload_addr = sector_start + geom.data_offset + detail::Geometry::length_header_size;
                   ctx.payload_size = entry_sz;
                   ctx.payload_written = 0;
-                  ctx.flag_writes = 0;
                   ctx.truncated_payload = false;
 
                   PartitionHandle::set_write_hook(partial_write_hook, &ctx);
-                  chron.push(std::span<std::uint8_t>(payload.data(), payload.size()), false);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
                   PartitionHandle::clear_write_hook();
 
                   SectorHandle sector(partition, geom.metadata_sector_count);
                   std::vector<std::uint8_t> raw_payload(entry_sz);
-                  sector.read(geom.data_offset,
+                  sector.read(geom.data_offset + detail::Geometry::length_header_size,
                               std::span<std::uint8_t>(raw_payload.data(), raw_payload.size()));
 
                   RC_ASSERT(ctx.truncated_payload);
@@ -699,24 +706,415 @@ extern "C" void app_main(void) {
                   for (std::size_t i = ctx.payload_written; i < raw_payload.size(); ++i)
                       RC_ASSERT(raw_payload[i] == 0xFF);
 
-                  const std::uint32_t flags_word = sector.read(0);
-                  const std::uint8_t flags_byte = static_cast<std::uint8_t>(flags_word & 0xFF);
+                  const std::uint8_t crc_byte =
+                      sector.read_byte(geom.data_offset + detail::Geometry::length_header_size + entry_sz);
 
-                  auto loaded = Chronicler::load(partition, entry_sz);
+                  auto loaded = Chronicler::load(partition, session_id, dispose_other_sessions);
                   RC_ASSERT(loaded.has_value());
                   auto chron2 = std::move(*loaded);
 
                   fill_entry(payload, 456);
-                  chron2.push(std::span<std::uint8_t>(payload.data(), payload.size()), false);
+                  chron2.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
 
-                  const std::uint32_t flags_word_after = sector.read(0);
-                  const std::uint8_t flags_byte_after =
-                      static_cast<std::uint8_t>(flags_word_after & 0xFF);
-                  RC_ASSERT(flags_byte_after == flags_byte);
+                  const std::uint8_t crc_byte_after =
+                      sector.read_byte(geom.data_offset + detail::Geometry::length_header_size + entry_sz);
+                  RC_ASSERT(crc_byte_after == crc_byte);
 
                   std::vector<std::uint8_t> read_buf(entry_sz);
                   chron2.read(0, std::span<std::uint8_t>(read_buf.data(), read_buf.size()));
                   RC_ASSERT(std::equal(read_buf.begin(), read_buf.end(), payload.begin(), payload.end()));
+              });
+
+    rc::check("erased header leaves sector appendable",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  auto sector = detail::DataSector::load(geom, partition, 0);
+                  RC_ASSERT(sector.size() == 0);
+                  RC_ASSERT(!sector.sealed());
+                  RC_ASSERT(sector.can_append(1));
+              });
+
+    rc::check("length header overflow seals sector",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  SectorHandle sector(partition, geom.metadata_sector_count);
+                  const std::uint16_t length_flags =
+                      static_cast<std::uint16_t>((detail::Geometry::flag_mask & ~detail::Geometry::flag_should_sync)
+                                                 | detail::Geometry::length_mask);
+                  std::uint8_t header[detail::Geometry::length_header_size]{};
+                  header[0] = static_cast<std::uint8_t>(length_flags & 0xFFU);
+                  header[1] = static_cast<std::uint8_t>((length_flags >> 8) & 0xFFU);
+                  sector.write(geom.data_offset, { header, sizeof(header) });
+
+                  auto loaded = detail::DataSector::load(geom, partition, 0);
+                  RC_ASSERT(loaded.size() == 0);
+                  RC_ASSERT(loaded.sealed());
+              });
+
+    rc::check("crc escape flag mismatch seals sector",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  SectorHandle sector(partition, geom.metadata_sector_count);
+                  const std::uint16_t length_flags =
+                      static_cast<std::uint16_t>((detail::Geometry::flag_mask & ~detail::Geometry::flag_crc_escaped)
+                                                 | 1U);
+                  std::uint8_t header[detail::Geometry::length_header_size]{};
+                  header[0] = static_cast<std::uint8_t>(length_flags & 0xFFU);
+                  header[1] = static_cast<std::uint8_t>((length_flags >> 8) & 0xFFU);
+                  sector.write(geom.data_offset, { header, sizeof(header) });
+
+                  const std::uint8_t payload = 0xAA;
+                  sector.write(geom.data_offset + detail::Geometry::length_header_size,
+                               std::span<const std::uint8_t>(&payload, 1));
+                  sector.write_byte(geom.data_offset + detail::Geometry::length_header_size + 1, 0x00);
+
+                  auto loaded = detail::DataSector::load(geom, partition, 0);
+                  RC_ASSERT(loaded.size() == 0);
+                  RC_ASSERT(loaded.sealed());
+              });
+
+    rc::check("crc escape byte without flag seals sector",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  SectorHandle sector(partition, geom.metadata_sector_count);
+                  const std::uint16_t length_flags =
+                      static_cast<std::uint16_t>(detail::Geometry::flag_mask | 1U);
+                  std::uint8_t header[detail::Geometry::length_header_size]{};
+                  header[0] = static_cast<std::uint8_t>(length_flags & 0xFFU);
+                  header[1] = static_cast<std::uint8_t>((length_flags >> 8) & 0xFFU);
+                  sector.write(geom.data_offset, { header, sizeof(header) });
+
+                  const std::uint8_t payload = 0x55;
+                  sector.write(geom.data_offset + detail::Geometry::length_header_size,
+                               std::span<const std::uint8_t>(&payload, 1));
+                  sector.write_byte(geom.data_offset + detail::Geometry::length_header_size + 1, 0xFE);
+
+                  auto loaded = detail::DataSector::load(geom, partition, 0);
+                  RC_ASSERT(loaded.size() == 0);
+                  RC_ASSERT(loaded.sealed());
+              });
+
+    rc::check("collect_used_sector_indices adds head after load when bitmap empty",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  auto all_ones = make_all_ones_bitmap(geom);
+                  SectorHandle slot0(partition, 0);
+                  SectorHandle slot1(partition, 1);
+                  write_metadata_slot(slot0, all_ones, false);
+                  write_metadata_slot(slot1, all_ones, true);
+
+                  auto meta = detail::Metadata::load(geom, partition);
+                  RC_ASSERT(meta.has_value());
+                  const auto indices = detail::collect_used_sector_indices(*meta, geom);
+                  RC_ASSERT(indices.size() == 1);
+                  RC_ASSERT(indices.front() == 0);
+              });
+
+    rc::check("entry disposable flag toggles",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  const std::size_t entry_sz = pick_entry_size();
+                  auto sector = detail::DataSector::create(geom, partition, 0);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 1);
+                  sector.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  RC_ASSERT(!sector.is_entry_disposable(0));
+                  sector.mark_entry_disposable(0);
+                  RC_ASSERT(sector.is_entry_disposable(0));
+              });
+
+    rc::check("mark_disposable is idempotent",
+              [] {
+                  auto partition = prepare_partition();
+                  const std::size_t entry_sz = pick_entry_size();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 1);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  RC_ASSERT(chron.mark_disposable(0));
+                  RC_ASSERT(!chron.mark_disposable(0));
+              });
+
+    rc::check("entry disposable auto marks sector disposable",
+              [] {
+                  auto partition = prepare_partition();
+                  const std::size_t entry_sz = pick_entry_size();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
+
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  for (std::size_t i = 0; i < sector_capacity + 1; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  }
+
+                  for (std::size_t i = 0; i + 1 < sector_capacity; ++i)
+                      RC_ASSERT(chron.mark_entry_disposable(i));
+                  RC_ASSERT(!chron.sweep_disposable_sector());
+
+                  RC_ASSERT(chron.mark_entry_disposable(sector_capacity - 1));
+                  RC_ASSERT(chron.sweep_disposable_sector());
+              });
+
+    rc::check("session filtering isolates entries",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  const std::uint8_t session_a = 0x11;
+                  const std::uint8_t session_b = 0x22;
+
+                  auto chron = Chronicler::create(partition, session_a, false);
+                  std::vector<std::uint8_t> payload(pick_entry_size());
+                  fill_entry(payload, 1);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  fill_entry(payload, 2);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  auto loaded_b = Chronicler::load(partition, session_b, false);
+                  RC_ASSERT(loaded_b.has_value());
+                  auto chron_b = std::move(*loaded_b);
+                  fill_entry(payload, 3);
+                  chron_b.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  auto loaded_a = Chronicler::load(partition, session_a, false);
+                  RC_ASSERT(loaded_a.has_value());
+                  RC_ASSERT(loaded_a->size() == 2);
+
+                  auto loaded_b_verify = Chronicler::load(partition, session_b, false);
+                  RC_ASSERT(loaded_b_verify.has_value());
+                  RC_ASSERT(loaded_b_verify->size() == 1);
+              });
+
+    rc::check("session filtering skips other-session sectors",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 2);
+
+                  const std::uint8_t session_a = 0x41;
+                  const std::uint8_t session_b = 0x42;
+                  const std::size_t entry_sz = pick_entry_size();
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
+
+                  auto chron_a = Chronicler::create(partition, session_a, false);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  for (std::size_t i = 0; i < sector_capacity; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron_a.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  }
+
+                  auto loaded_b = Chronicler::load(partition, session_b, false);
+                  RC_ASSERT(loaded_b.has_value());
+                  auto chron_b = std::move(*loaded_b);
+                  fill_entry(payload, 100);
+                  chron_b.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  auto loaded_a = Chronicler::load(partition, session_a, false);
+                  RC_ASSERT(loaded_a.has_value());
+                  auto chron_a2 = std::move(*loaded_a);
+                  fill_entry(payload, 200);
+                  chron_a2.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  RC_ASSERT(chron_a2.size() == sector_capacity + 1);
+                  std::vector<std::uint8_t> read_buf(entry_sz);
+                  fill_entry(payload, 200);
+                  RC_ASSERT(chron_a2.read(sector_capacity,
+                                          std::span<std::uint8_t>(read_buf.data(), read_buf.size()))
+                            == payload.size());
+                  RC_ASSERT(std::equal(payload.begin(), payload.end(), read_buf.begin(), read_buf.end()));
+              });
+
+    rc::check("mark_synced handle rejects other session",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  const std::uint8_t session_a = 0x51;
+                  const std::uint8_t session_b = 0x52;
+                  const std::size_t entry_sz = pick_entry_size();
+
+                  auto chron_a = Chronicler::create(partition, session_a, false);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 7);
+                  auto handle =
+                      chron_a.push_with_handle(std::span<const std::uint8_t>(payload.data(), payload.size()), true);
+
+                  auto loaded_b = Chronicler::load(partition, session_b, false);
+                  RC_ASSERT(loaded_b.has_value());
+                  auto chron_b = std::move(*loaded_b);
+                  RC_ASSERT(!chron_b.mark_synced(handle));
+              });
+
+    rc::check("mark_synced handle rejects erased sector",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  const std::size_t entry_sz = pick_entry_size();
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
+
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 1);
+                  auto handle =
+                      chron.push_with_handle(std::span<const std::uint8_t>(payload.data(), payload.size()), true);
+
+                  for (std::size_t i = 1; i < sector_capacity + 1; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  }
+
+                  RC_ASSERT(chron.mark_disposable(0));
+                  RC_ASSERT(chron.sweep_disposable_sector());
+                  RC_ASSERT(!chron.mark_synced(handle));
+              });
+
+    rc::check("mark_synced handle rejects recycled sector",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  const std::size_t entry_sz = pick_entry_size();
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 1);
+
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 1);
+                  auto handle =
+                      chron.push_with_handle(std::span<const std::uint8_t>(payload.data(), payload.size()), true);
+
+                  for (std::size_t i = 1; i < sector_capacity + 1; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  }
+
+                  RC_ASSERT(chron.mark_disposable(0));
+                  RC_ASSERT(chron.sweep_disposable_sector());
+
+                  fill_entry(payload, 42);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  RC_ASSERT(!chron.mark_synced(handle));
+              });
+
+    rc::check("session filtering across wrap",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 3);
+
+                  const std::uint8_t session_a = 0x61;
+                  const std::uint8_t session_b = 0x62;
+                  const std::size_t entry_sz = pick_entry_size();
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
+
+                  auto chron_a = Chronicler::create(partition, session_a, false);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  const std::size_t pushes_a = sector_capacity * (geom.data_sector_count + 1);
+                  for (std::size_t i = 0; i < pushes_a; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron_a.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  }
+
+                  auto loaded_b = Chronicler::load(partition, session_b, false);
+                  RC_ASSERT(loaded_b.has_value());
+                  auto chron_b = std::move(*loaded_b);
+                  fill_entry(payload, 5000);
+                  chron_b.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  auto loaded_a = Chronicler::load(partition, session_a, false);
+                  RC_ASSERT(loaded_a.has_value());
+                  RC_ASSERT(loaded_a->size() == geom.data_sector_count * sector_capacity);
+              });
+
+    rc::check("dispose other sessions marks disposable",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  const std::uint8_t session_a = 0x33;
+                  const std::uint8_t session_b = 0x34;
+
+                  auto chron = Chronicler::create(partition, session_a, false);
+                  std::vector<std::uint8_t> payload(pick_entry_size());
+                  fill_entry(payload, 7);
+                  chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  auto loaded_b = Chronicler::load(partition, session_b, false);
+                  RC_ASSERT(loaded_b.has_value());
+                  auto chron_b = std::move(*loaded_b);
+                  fill_entry(payload, 8);
+                  chron_b.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+                  auto loaded = Chronicler::load(partition, session_b, true);
+                  RC_ASSERT(loaded.has_value());
+
+                  auto meta = detail::Metadata::load(geom, partition);
+                  RC_ASSERT(meta.has_value());
+                  for (auto sector_idx : detail::collect_used_sector_indices(*meta, geom)) {
+                      SectorHandle sector(partition, geom.metadata_sector_count + sector_idx);
+                      const std::uint8_t sid = sector.read_byte(0);
+                      if (sid != session_b)
+                          RC_ASSERT(meta->is_disposable(sector_idx));
+                      else
+                          RC_ASSERT(!meta->is_disposable(sector_idx));
+                  }
+              });
+
+    rc::check("sweep_disposable refuses non-disposable non-head sector",
+              [] {
+                  auto partition = prepare_partition();
+                  const std::size_t entry_sz = pick_entry_size();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 2);
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
+
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  const std::size_t entries = sector_capacity * 2 + 1;
+                  for (std::size_t i = 0; i < entries; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+                  }
+
+                  RC_ASSERT(!chron.sweep_disposable_sector());
               });
 
     rc::check("append and reload preserves data across wrap",
@@ -762,6 +1160,23 @@ extern "C" void app_main(void) {
                   commands.push_back(std::make_shared<ReloadAndVerify>());
 
                   rc::state::runAll(commands, ctx.model, ctx.sut);
+              });
+
+    rc::check("push_with_handle returns handle for mark_synced",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  const std::size_t entry_sz = pick_entry_size();
+                  auto chron = Chronicler::create(partition, session_id, dispose_other_sessions);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 7);
+
+                  auto handle = chron.push_with_handle(std::span<const std::uint8_t>(payload.data(), payload.size()), true);
+                  RC_ASSERT(!chron.is_synced(0));
+                  RC_ASSERT(chron.mark_synced(handle));
+                  RC_ASSERT(chron.is_synced(0));
               });
 
     rc::check("mixed sync/non-sync pushes survive reloads",

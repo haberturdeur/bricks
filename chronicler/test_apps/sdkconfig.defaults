@@ -12,3 +12,6 @@ CONFIG_ESP_PARTITION_ERASE_CHECK=n
 
 # Interactive menu needs disabled watchdog
 CONFIG_ESP_TASK_WDT_INIT=n
+# Increase main task stack to avoid Unity test overflows.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+CONFIG_MAIN_TASK_STACK_SIZE=6144

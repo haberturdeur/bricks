@@ -12,6 +12,8 @@ public:
     enum Flags : uint8_t {
         Used          = 1U << 0,
         FullAndSynced = 1U << 1,
+        Disposable    = 1U << 2,
+        Reserved      = 1U << 3,
     };
 
     enum class Pattern : uint8_t {
@@ -27,18 +29,25 @@ private:
     std::optional<std::size_t> m_head;
 
     uint8_t _read_flags(std::size_t idx) const {
-        uint8_t flags = m_cache.read(idx / 4);
+        uint8_t flags = m_cache.read(idx / 2);
         flags = ~flags;
-        flags >>= (idx % 4) * 2;
-        flags &= 0b11;
+        if (idx % 2 == 1)
+            flags >>= 4;
+        flags &= 0x0F;
         return flags;
     }
 
     void _mark_flags(std::size_t idx, std::uint8_t flags) {
-        flags &= 0b11;
-        flags <<= (idx % 4) * 2;
-        flags = ~flags;
-        m_cache.write(idx / 4, flags);
+        flags &= 0x0F;
+        std::uint8_t nibble = static_cast<std::uint8_t>(~flags) & 0x0F;
+        std::uint8_t target;
+        if (idx % 2 == 0)
+            target = static_cast<std::uint8_t>(nibble | 0xF0);
+        else
+            target = static_cast<std::uint8_t>((nibble << 4) | 0x0F);
+        std::uint8_t current = m_cache.read(idx / 2);
+        std::uint8_t next = static_cast<std::uint8_t>(current & target);
+        m_cache.write(idx / 2, next);
     }
 
     std::optional<std::size_t> _find_head() {
@@ -54,7 +63,7 @@ public:
     Bitmap(const Geometry& geometry, SectorHandle sector)
         : m_geometry(geometry)
         , m_sector(sector)
-        , m_cache(m_sector, layout::g_bitmap, geometry.data_sector_count / 4) {}
+        , m_cache(m_sector, layout::g_bitmap, (geometry.data_sector_count + 1U) / 2U) {}
 
     void load() {
         m_cache.load();
@@ -84,6 +93,9 @@ public:
     bool is_full_and_synced(std::size_t idx) const { return _read_flags(idx) & FullAndSynced; }
     void mark_full_and_synced(std::size_t idx) { _mark_flags(idx, FullAndSynced); }
 
+    bool is_disposable(std::size_t idx) const { return _read_flags(idx) & Disposable; }
+    void mark_disposable(std::size_t idx) { _mark_flags(idx, Disposable); }
+
     std::size_t count_used() const {
         std::size_t count = 0;
         for (std::size_t i = 0; i < m_geometry.data_sector_count; ++i)
@@ -92,7 +104,7 @@ public:
     }
 
     Pattern pattern() const {
-        const std::size_t size = m_geometry.data_sector_count / 4;
+        const std::size_t size = (m_geometry.data_sector_count + 1U) / 2U;
         bool all_ones = true;
         bool all_zeros = true;
         for (std::size_t i = 0; i < size; ++i) {
@@ -110,7 +122,7 @@ public:
     }
 
     void mark_all_full_and_synced() {
-        const std::size_t size = m_geometry.data_sector_count / 4;
+        const std::size_t size = (m_geometry.data_sector_count + 1U) / 2U;
         for (std::size_t i = 0; i < size; ++i)
             m_cache.write(i, 0x00);
         if (m_geometry.data_sector_count == 0)

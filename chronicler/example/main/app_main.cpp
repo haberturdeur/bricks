@@ -18,6 +18,8 @@ using namespace bricks::chronicler;
 namespace {
 constexpr char TAG[] = "chronicler_example";
 constexpr char partition_label[] = "storage";
+constexpr std::uint8_t session_id = 0x01;
+constexpr bool dispose_other_sessions = false;
 
 struct [[gnu::packed]] LogEntry {
     std::uint32_t sequence;
@@ -55,7 +57,7 @@ PartitionHandle find_data_partition() {
     return PartitionHandle(part);
 }
 
-void sync_callback(Chronicler&, std::span<std::uint8_t> entry, void*) {
+void sync_callback(Chronicler&, std::span<const std::uint8_t> entry, void*) {
     LogEntry decoded{};
     std::memcpy(&decoded, entry.data(), sizeof(decoded));
     ESP_LOGI(TAG,
@@ -71,10 +73,10 @@ void sync_callback(Chronicler&, std::span<std::uint8_t> entry, void*) {
 extern "C" void app_main(void) {
     PartitionHandle partition = find_data_partition();
 
-    auto loaded = Chronicler::load(partition, entry_size);
+    auto loaded = Chronicler::load(partition, session_id, dispose_other_sessions);
     Chronicler chronicler = loaded
                           ? std::move(*loaded)
-                          : Chronicler::create(partition, entry_size);
+                          : Chronicler::create(partition, session_id, dispose_other_sessions);
 
     chronicler.set_sync_callback(sync_callback, nullptr);
 
@@ -115,7 +117,11 @@ extern "C" void app_main(void) {
     std::array<std::byte, entry_size> read_buf{};
     for (std::size_t i = 0; i < chronicler.size(); ++i) {
         LogEntry entry{};
-        chronicler.read(i, to_u8_span(read_buf));
+        const std::size_t bytes = chronicler.read(i, to_u8_span(read_buf));
+        if (bytes != entry_size) {
+            ESP_LOGE(TAG, "entry[%zu]: unexpected size %zu", i, bytes);
+            continue;
+        }
         std::memcpy(&entry, read_buf.data(), entry_size);
         ESP_LOGI(TAG,
                  "entry[%zu]: seq=%" PRIu32 " temp=%" PRId32 "C ts=%" PRIu64 " note=%.*s",
@@ -136,7 +142,7 @@ extern "C" void app_main(void) {
     if (chronicler.sweep_synced_sector())
         ESP_LOGI(TAG, "marked a fully synced sector");
 
-    auto reopened = Chronicler::load_or_create(partition, entry_size);
+    auto reopened = Chronicler::load_or_create(partition, session_id, dispose_other_sessions);
     ESP_LOGI(TAG, "load_or_create sees %zu entries", reopened.size());
 
     ESP_LOGI(TAG, "example complete");

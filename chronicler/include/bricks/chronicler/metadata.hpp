@@ -19,11 +19,10 @@ private:
     void _format() {
         m_sector.write(layout::g_magic, g_magic);
         m_sector.write(layout::g_version, g_version);
-        m_sector.write(layout::g_entry_size, m_geometry.entry_size);
     }
 
     void _mark_initialized() {
-        m_sector.write(layout::g_initialized, 0U);
+        m_sector.write_byte(layout::g_initialized, 0x00);
         m_bitmap.load_erased();
     }
 
@@ -37,12 +36,11 @@ public:
         SectorHandle sector(partition, idx);
         bool initialized = sector.read(layout::g_magic) == g_magic
                         && sector.read(layout::g_version) == g_version
-                        && sector.read(layout::g_entry_size) == geometry.entry_size
-                        && sector.read(layout::g_initialized) == 0;
+                        && sector.read_byte(layout::g_initialized) == 0x00;
         if (!initialized)
             return std::nullopt;
         MetadataSector out(geometry, sector);
-        out.m_old = sector.read(layout::g_old) == 0;
+        out.m_old = sector.read_byte(layout::g_old) == 0x00;
         out.bitmap().load();
         return out;
     }
@@ -64,7 +62,7 @@ public:
 
     bool is_old() const { return m_old; }
     void mark_old() {
-        m_sector.write(layout::g_old, 0U);
+        m_sector.write_byte(layout::g_old, 0x00);
         m_old = true;
     }
 
@@ -187,6 +185,23 @@ public:
             return false;
         slot->bitmap().mark_full_and_synced(idx);
         return true;
+    }
+
+    bool mark_disposable(std::size_t idx) {
+        auto& slot = _active_slot();
+        if (!slot || idx >= m_geometry.data_sector_count)
+            return false;
+        if (slot->bitmap().is_disposable(idx))
+            return false;
+        slot->bitmap().mark_disposable(idx);
+        return true;
+    }
+
+    bool is_disposable(std::size_t idx) const {
+        const auto& slot = _active_slot();
+        if (!slot || idx >= m_geometry.data_sector_count)
+            return false;
+        return slot->bitmap().is_disposable(idx);
     }
 
     void advance_head() {

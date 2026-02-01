@@ -12,10 +12,9 @@ namespace bricks::chronicler::detail {
 namespace layout {
 inline constexpr std::size_t g_magic       = 0;
 inline constexpr std::size_t g_version     = 4;
-inline constexpr std::size_t g_entry_size  = 8;
-inline constexpr std::size_t g_initialized = 12;
-inline constexpr std::size_t g_old         = 16;
-inline constexpr std::size_t g_bitmap      = 20;
+inline constexpr std::size_t g_initialized = 8;
+inline constexpr std::size_t g_old         = 9;
+inline constexpr std::size_t g_bitmap      = 10;
 } // namespace layout
 
 inline constexpr std::uint32_t g_magic = (((std::uint32_t)'C') << 0)
@@ -25,59 +24,47 @@ inline constexpr std::uint32_t g_magic = (((std::uint32_t)'C') << 0)
 inline constexpr std::uint32_t g_version = 1U;
 
 struct Geometry {
-    std::uint32_t entry_size;
-    std::size_t sector_capacity;
     std::size_t data_offset;
     std::size_t metadata_sector_count;
     std::size_t data_sector_count;
+    std::size_t sector_size;
 
-    static constexpr std::size_t calc_sector_capacity(std::size_t sector_size, std::size_t entry_size) {
-        std::size_t capacity = 0;
-        while (sector_size != 0) {
-            std::size_t step = entry_size + (capacity % 8 == 0 ? 4 : 0);
-            if (sector_size < step)
-                break;
-            sector_size -= step;
-            ++capacity;
-        }
-        return capacity;
-    }
-
-    static constexpr std::size_t calc_data_offset(std::size_t sector_capacity) {
-        std::size_t data_offset = sector_capacity / 2;
-        if (sector_capacity % 2 != 0)
-            data_offset++;
-        data_offset = (data_offset + 3U) & ~std::size_t(3);
-        return data_offset;
-    }
+    static constexpr std::size_t sector_header_size = 2;
+    static constexpr std::size_t length_header_size = 2;
+    static constexpr std::size_t crc_size = 1;
+    static constexpr std::size_t record_overhead = length_header_size + crc_size;
+    static constexpr std::uint16_t length_mask = 0x0FFF;
+    static constexpr std::uint16_t flag_mask = 0xF000;
+    static constexpr std::uint16_t flag_should_sync = 1U << 12;
+    static constexpr std::uint16_t flag_synced = 1U << 13;
+    static constexpr std::uint16_t flag_crc_escaped = 1U << 14;
+    static constexpr std::uint16_t flag_entry_disposable = 1U << 15;
+    static constexpr std::size_t max_entry_size = length_mask;
 
     constexpr std::size_t calc_data_sector_count(const PartitionHandle& partition) {
         if (partition.sector_count() <= metadata_sector_count)
             return 0;
 
         const std::size_t partition_limit = partition.sector_count() - metadata_sector_count;
-        const std::size_t rounded_partition_limit = (partition_limit / 16U) * 16U;
 
         if (partition.sector_size() <= layout::g_bitmap)
             return 0;
 
-        const std::size_t available_words = (partition.sector_size() - layout::g_bitmap) / 4U;
-        const std::size_t metadata_limit = available_words * 16U;
+        const std::size_t available_bytes = partition.sector_size() - layout::g_bitmap;
+        const std::size_t metadata_limit = available_bytes * 2U;
 
-        if (metadata_limit == 0 || rounded_partition_limit == 0)
+        if (metadata_limit == 0 || partition_limit == 0)
             return 0;
 
-        return std::min(metadata_limit, rounded_partition_limit);
+        const std::size_t count = std::min(metadata_limit, partition_limit);
+        return (count / 2U) * 2U;
     }
 
-    constexpr Geometry(std::size_t entry_sz, const PartitionHandle& partition)
-        : entry_size(static_cast<std::uint32_t>(entry_sz))
-        , sector_capacity(calc_sector_capacity(partition.sector_size(), entry_sz))
-        , data_offset(calc_data_offset(sector_capacity))
+    constexpr Geometry(const PartitionHandle& partition)
+        : data_offset(sector_header_size)
         , metadata_sector_count(2)
-        , data_sector_count(calc_data_sector_count(partition)) {
-        assert(entry_sz % 4 == 0);
-    }
+        , data_sector_count(calc_data_sector_count(partition))
+        , sector_size(partition.sector_size()) {}
 };
 
 } // namespace bricks::chronicler::detail

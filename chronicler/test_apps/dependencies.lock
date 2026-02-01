@@ -19,7 +19,7 @@ dependencies:
       git: https://github.com/haberturdeur/bricks.git
       path: exceptions
       type: git
-    version: d1bfb964b6a983a10afdb036d37090df8764cd7b
+    version: 448d05da23393ea36dd2c0dc0a3ff06e24100822
   idf:
     source:
       type: idf
@@ -27,6 +27,6 @@ dependencies:
 direct_dependencies:
 - haberturdeur/chronicler
 - idf
-manifest_hash: 9ac1c9928218458b4b3ea69d7484168fb505f874ec7731fadd62d71005eb66a6
-target: linux
+manifest_hash: 2773a341eb8dfe76de1ada4c21b2ad080bd3a9070438c8850544a250a512382c
+target: esp32s3
 version: 2.0.0
