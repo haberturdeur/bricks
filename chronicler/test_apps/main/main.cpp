@@ -13,6 +13,7 @@
 #include <deque>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 using namespace bricks::chronicler;
@@ -1039,6 +1040,106 @@ TEST_CASE("session filtering isolates entries", "[chronicler][session]") {
     auto loaded_b_verify = Chronicler::load(partition, session_b, false);
     TEST_ASSERT_TRUE(loaded_b_verify.has_value());
     TEST_ASSERT_EQUAL_UINT32(count_b, loaded_b_verify->size());
+}
+
+TEST_CASE("map_entries defaults to current session oldest first", "[chronicler][iteration][session]") {
+    auto partition = make_partition_handle();
+    wipe_partition(partition);
+
+    detail::Geometry geom(partition);
+    require_data_sectors_or_skip(geom, 3);
+
+    const std::uint8_t session_a = 0x21;
+    const std::uint8_t session_b = 0x22;
+
+    auto chron_a = Chronicler::create(partition, session_a, false);
+    std::vector<std::uint8_t> payload(entry_size);
+
+    fill_entry(payload, 10);
+    chron_a.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+    fill_entry(payload, 11);
+    chron_a.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+    auto loaded_b = Chronicler::load(partition, session_b, false);
+    TEST_ASSERT_TRUE(loaded_b.has_value());
+    auto chron_b = std::move(*loaded_b);
+    fill_entry(payload, 20);
+    chron_b.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+    auto loaded_a = Chronicler::load(partition, session_a, false);
+    TEST_ASSERT_TRUE(loaded_a.has_value());
+    auto chron_a2 = std::move(*loaded_a);
+    fill_entry(payload, 30);
+    chron_a2.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+    const auto seeds = chron_a2.map_entries(
+        [](const Chronicler::IterationEntry&, std::span<const std::uint8_t> bytes) {
+            return bytes[0];
+        });
+
+    const std::vector<std::uint8_t> expected{10, 11, 30};
+    TEST_ASSERT_EQUAL_UINT32(expected.size(), seeds.size());
+    for (std::size_t i = 0; i < expected.size(); ++i)
+        TEST_ASSERT_EQUAL_UINT8(expected[i], seeds[i]);
+}
+
+TEST_CASE("map_entries can include all sessions and reverse order", "[chronicler][iteration][session]") {
+    auto partition = make_partition_handle();
+    wipe_partition(partition);
+
+    detail::Geometry geom(partition);
+    require_data_sectors_or_skip(geom, 3);
+
+    const std::uint8_t session_a = 0x31;
+    const std::uint8_t session_b = 0x32;
+
+    auto chron_a = Chronicler::create(partition, session_a, false);
+    std::vector<std::uint8_t> payload(entry_size);
+
+    fill_entry(payload, 10);
+    chron_a.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+    fill_entry(payload, 11);
+    chron_a.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+    auto loaded_b = Chronicler::load(partition, session_b, false);
+    TEST_ASSERT_TRUE(loaded_b.has_value());
+    auto chron_b = std::move(*loaded_b);
+    fill_entry(payload, 20);
+    chron_b.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+    auto loaded_a = Chronicler::load(partition, session_a, false);
+    TEST_ASSERT_TRUE(loaded_a.has_value());
+    auto chron_a2 = std::move(*loaded_a);
+    fill_entry(payload, 30);
+    chron_a2.push(std::span<const std::uint8_t>(payload.data(), payload.size()), false);
+
+    const auto all_forward = chron_a2.map_entries(
+        [](const Chronicler::IterationEntry& entry, std::span<const std::uint8_t> bytes) {
+            return std::pair<std::uint8_t, std::uint8_t>(entry.session_id, bytes[0]);
+        },
+        Chronicler::IterationScope::AllSessions,
+        Chronicler::IterationOrder::OldestFirst);
+
+    const std::vector<std::pair<std::uint8_t, std::uint8_t>> expected_forward{
+        {session_a, 10}, {session_a, 11}, {session_b, 20}, {session_a, 30}
+    };
+    TEST_ASSERT_EQUAL_UINT32(expected_forward.size(), all_forward.size());
+    for (std::size_t i = 0; i < expected_forward.size(); ++i) {
+        TEST_ASSERT_EQUAL_UINT8(expected_forward[i].first, all_forward[i].first);
+        TEST_ASSERT_EQUAL_UINT8(expected_forward[i].second, all_forward[i].second);
+    }
+
+    const auto all_reverse = chron_a2.map_entries(
+        [](const Chronicler::IterationEntry&, std::span<const std::uint8_t> bytes) {
+            return bytes[0];
+        },
+        Chronicler::IterationScope::AllSessions,
+        Chronicler::IterationOrder::NewestFirst);
+
+    const std::vector<std::uint8_t> expected_reverse{30, 20, 11, 10};
+    TEST_ASSERT_EQUAL_UINT32(expected_reverse.size(), all_reverse.size());
+    for (std::size_t i = 0; i < expected_reverse.size(); ++i)
+        TEST_ASSERT_EQUAL_UINT8(expected_reverse[i], all_reverse[i]);
 }
 
 TEST_CASE("session filtering skips other-session sectors", "[chronicler][session]") {

@@ -4,10 +4,13 @@
 #include "bricks/chronicler/metadata.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace bricks::chronicler {
@@ -19,7 +22,24 @@ public:
         std::uint16_t index;
     };
 
+    enum class IterationScope : std::uint8_t {
+        CurrentSession,
+        AllSessions,
+    };
+
+    enum class IterationOrder : std::uint8_t {
+        OldestFirst,
+        NewestFirst,
+    };
+
+    struct IterationEntry {
+        EntryHandle handle;
+        std::uint8_t session_id;
+        std::size_t ordinal;
+    };
+
     using SyncCallback = void(*)(Chronicler&, std::span<const std::uint8_t>, void*);
+    using IterateCallback = bool(*)(const IterationEntry&, std::span<const std::uint8_t>, void*);
 
     static std::optional<Chronicler> load(PartitionHandle partition,
                                           std::uint8_t session_id,
@@ -48,8 +68,39 @@ public:
     std::uint8_t session_id() const;
     std::uint8_t sector_flags() const;
     std::size_t size() const;
+    std::size_t iterate(IterateCallback callback,
+                        void* ctx,
+                        IterationScope scope = IterationScope::CurrentSession,
+                        IterationOrder order = IterationOrder::OldestFirst) const;
     bool sweep_synced_sector();
     bool sweep_disposable_sector();
+
+    template <typename Mapper>
+    auto map_entries(Mapper&& mapper,
+                     IterationScope scope = IterationScope::CurrentSession,
+                     IterationOrder order = IterationOrder::OldestFirst) const
+        -> std::vector<std::decay_t<std::invoke_result_t<Mapper&,
+                                                         const IterationEntry&,
+                                                         std::span<const std::uint8_t>>>> {
+        using mapped_t = std::decay_t<std::invoke_result_t<Mapper&,
+                                                           const IterationEntry&,
+                                                           std::span<const std::uint8_t>>>;
+        struct Context {
+            Mapper* mapper;
+            std::vector<mapped_t>* out;
+        };
+
+        std::vector<mapped_t> out;
+        Context context{ &mapper, &out };
+        const auto thunk = [](const IterationEntry& entry, std::span<const std::uint8_t> data, void* raw) {
+            auto* typed = static_cast<Context*>(raw);
+            typed->out->push_back(std::invoke(*typed->mapper, entry, data));
+            return true;
+        };
+
+        iterate(thunk, &context, scope, order);
+        return out;
+    }
 
     Chronicler(const Chronicler&) = delete;
     Chronicler& operator=(const Chronicler&) = delete;

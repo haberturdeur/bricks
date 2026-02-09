@@ -488,6 +488,82 @@ std::size_t Chronicler::size() const {
     return total;
 }
 
+std::size_t Chronicler::iterate(IterateCallback callback,
+                                void* ctx,
+                                IterationScope scope,
+                                IterationOrder order) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!callback || !m_active_sector)
+        return 0;
+
+    struct SectorView {
+        std::size_t idx;
+        std::uint8_t session_id;
+        std::size_t entry_count;
+        bool is_head;
+    };
+
+    std::vector<SectorView> sectors;
+    const auto indices = collect_used_sector_indices(m_metadata, m_geometry);
+    sectors.reserve(indices.size());
+    for (const auto idx : indices) {
+        std::uint8_t session_id = 0xFF;
+        std::size_t entry_count = 0;
+        const bool is_head = idx == m_metadata.head();
+        if (idx == m_metadata.head()) {
+            session_id = m_active_sector->session_id();
+            entry_count = m_active_sector->size();
+        } else {
+            detail::DataSector& sector = _cached_sector(idx);
+            session_id = sector.session_id();
+            entry_count = sector.size();
+        }
+
+        if (scope == IterationScope::CurrentSession && session_id != m_session_id)
+            continue;
+        sectors.push_back(SectorView{ idx, session_id, entry_count, is_head });
+    }
+
+    std::vector<std::uint8_t> scratch;
+    std::size_t emitted = 0;
+    const auto emit_entry = [&](const SectorView& view, std::size_t local_idx) {
+        const detail::DataSector& sector = view.is_head ? *m_active_sector : _cached_sector(view.idx);
+        const auto size = sector.entry_size(local_idx);
+        scratch.resize(size);
+        sector.read(local_idx, std::span<std::uint8_t>(scratch.data(), scratch.size()));
+
+        assert(view.idx <= std::numeric_limits<std::uint16_t>::max());
+        assert(local_idx <= std::numeric_limits<std::uint16_t>::max());
+        IterationEntry entry{};
+        entry.handle.sector = static_cast<std::uint16_t>(view.idx);
+        entry.handle.index = static_cast<std::uint16_t>(local_idx);
+        entry.session_id = view.session_id;
+        entry.ordinal = emitted;
+        if (!callback(entry, std::span<const std::uint8_t>(scratch.data(), scratch.size()), ctx))
+            return false;
+        emitted++;
+        return true;
+    };
+
+    if (order == IterationOrder::OldestFirst) {
+        for (const auto& view : sectors) {
+            for (std::size_t i = 0; i < view.entry_count; ++i) {
+                if (!emit_entry(view, i))
+                    return emitted;
+            }
+        }
+        return emitted;
+    }
+
+    for (auto s_it = sectors.rbegin(); s_it != sectors.rend(); ++s_it) {
+        for (std::size_t i = s_it->entry_count; i > 0; --i) {
+            if (!emit_entry(*s_it, i - 1))
+                return emitted;
+        }
+    }
+    return emitted;
+}
+
 bool Chronicler::sweep_synced_sector() {
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto indices = collect_used_sector_indices(m_metadata, m_geometry);
