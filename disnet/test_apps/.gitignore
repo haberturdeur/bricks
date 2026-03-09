@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+**/build/
+**/sdkconfig
+**/sdkconfig.old
+**/dependencies.lock

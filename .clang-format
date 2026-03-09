@@ -1,0 +1,13 @@
+BasedOnStyle: LLVM
+Language: Cpp
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ColumnLimit: 120
+SortIncludes: false
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+BinPackArguments: true
+BinPackParameters: true
+AllowShortFunctionsOnASingleLine: Empty
+SpaceBeforeParens: ControlStatements
+PointerAlignment: Left
