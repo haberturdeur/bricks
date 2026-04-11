@@ -6,3 +6,8 @@ compile_commands.json
 sdkconfig
 .gdb_history
 tmp_*
+build*
+.codex
+.pi
+.claude
+.worktrees
