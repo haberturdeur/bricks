@@ -1,5 +1,2 @@
-idf_component_register(SRCS "core.cpp"
-                            "reliable.cpp"
-                            "segmented.cpp"
-                       INCLUDE_DIRS "include"
-                       REQUIRES esp_wifi mbedtls)
+idf_component_register(INCLUDE_DIRS "include"
+                       REQUIRES esp_event esp_wifi)

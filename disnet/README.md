@@ -1,10 +1,11 @@
 # Disnet
 
-## Design
+Low-level message transport and mesh-routing primitives.
 
-- build on top of ESP-NOW
-  - v1 - 250 bytes payload
-  - v2 - 1470 bytes payload
-  - brodcast
-  - paired, encrypted unicast to N(const) devices
+The current tree provides:
 
+- a transport packet type carrying source, target, source sequence number, and payload
+- C++20 concepts for validating transport and router implementations
+- a flooding router
+- a work-in-progress HWMP-style mesh router
+- an ESP-NOW transport adapter
