@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Schwi Inspector</title>
+    <style>
+        :root {
+            --bg: #f4efe6;
+            --panel: rgba(255, 250, 241, 0.92);
+            --panel-strong: #fffdf8;
+            --ink: #1d2a2f;
+            --muted: #5f6f74;
+            --line: rgba(33, 55, 60, 0.12);
+            --accent: #0f766e;
+            --accent-soft: rgba(15, 118, 110, 0.16);
+            --warn: #c2410c;
+            --warn-soft: rgba(194, 65, 12, 0.16);
+            --trace: #155e75;
+            --global: #0369a1;
+            --action: #7c3aed;
+            --shadow: 0 18px 50px rgba(22, 34, 39, 0.10);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--ink);
+            font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 32%),
+                radial-gradient(circle at top right, rgba(194, 65, 12, 0.10), transparent 26%),
+                linear-gradient(180deg, #faf6ef 0%, #f0e9dd 100%);
+        }
+
+        .shell {
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 18px;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: minmax(280px, 2fr) minmax(220px, 1fr);
+            gap: 16px;
+        }
+
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 22px;
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+        }
+
+        .load-panel {
+            padding: 18px;
+        }
+
+        .hero h1,
+        .hero h2,
+        .layout h2 {
+            margin: 0;
+            font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+            letter-spacing: -0.03em;
+        }
+
+        .subtitle {
+            margin: 8px 0 16px;
+            color: var(--muted);
+            font-size: 0.96rem;
+            line-height: 1.45;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 168px;
+            resize: vertical;
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            padding: 14px 16px;
+            color: var(--ink);
+            background: rgba(255, 255, 255, 0.8);
+            font: 0.92rem/1.5 "IBM Plex Mono", monospace;
+        }
+
+        .toolbar,
+        .metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .toolbar {
+            margin-top: 12px;
+        }
+
+        .toolbar .grow {
+            flex: 1 1 auto;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        button {
+            border: 0;
+            border-radius: 999px;
+            padding: 10px 14px;
+            background: var(--ink);
+            color: white;
+            cursor: pointer;
+        }
+
+        button.secondary {
+            background: rgba(29, 42, 47, 0.08);
+            color: var(--ink);
+        }
+
+        button.small {
+            padding: 8px 12px;
+            font-size: 0.86rem;
+        }
+
+        button.ghost {
+            background: transparent;
+            color: var(--ink);
+            border: 1px solid var(--line);
+        }
+
+        .metrics {
+            padding: 18px;
+            align-content: start;
+        }
+
+        .metric {
+            min-width: 96px;
+            padding: 12px 14px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--line);
+        }
+
+        .metric strong {
+            display: block;
+            font-family: "Space Grotesk", sans-serif;
+            font-size: 1.4rem;
+        }
+
+        .metric span {
+            color: var(--muted);
+            font-size: 0.82rem;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(340px, 1.2fr) minmax(380px, 1.6fr) minmax(320px, 1fr);
+            gap: 16px;
+            min-height: 0;
+        }
+
+        .column {
+            display: grid;
+            grid-template-rows: auto auto 1fr;
+            min-height: 0;
+        }
+
+        .column .panel {
+            min-height: 0;
+        }
+
+        .column-header {
+            padding: 16px 18px 0;
+        }
+
+        .filters {
+            display: flex;
+            gap: 8px;
+            padding: 12px 18px 14px;
+            flex-wrap: wrap;
+        }
+
+        .filters input,
+        .filters select {
+            flex: 1 1 140px;
+            min-width: 0;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--line);
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .filters .wide {
+            flex: 2 1 220px;
+        }
+
+        .filter-summary,
+        .state-summary {
+            padding: 0 18px 14px;
+            color: var(--muted);
+            font-size: 0.84rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid var(--line);
+            color: var(--ink);
+            white-space: nowrap;
+        }
+
+        .list {
+            overflow: auto;
+            padding: 8px 10px 12px;
+        }
+
+        .event-item {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 10px;
+            align-items: center;
+            width: 100%;
+            margin: 0 0 8px;
+            padding: 12px 12px 12px 10px;
+            border-radius: 16px;
+            border: 1px solid transparent;
+            background: rgba(255, 255, 255, 0.6);
+            text-align: left;
+        }
+
+        .event-item.selected {
+            border-color: rgba(15, 118, 110, 0.32);
+            background: rgba(15, 118, 110, 0.10);
+        }
+
+        .event-kind {
+            width: 10px;
+            height: 42px;
+            border-radius: 999px;
+            background: var(--accent);
+        }
+
+        .event-kind.trace-targeted { background: var(--trace); }
+        .event-kind.trace-global { background: var(--global); }
+        .event-kind.trace-action { background: var(--action); }
+        .event-kind.log-drop { background: var(--warn); }
+        .event-kind.log-delivery { background: var(--accent); }
+
+        .event-title {
+            font-weight: 600;
+            line-height: 1.25;
+        }
+
+        .event-meta,
+        .muted {
+            color: var(--muted);
+            font-size: 0.84rem;
+        }
+
+        .event-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .event-badge {
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(29, 42, 47, 0.08);
+            font-size: 0.76rem;
+            color: var(--ink);
+        }
+
+        .event-time {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.84rem;
+            color: var(--muted);
+        }
+
+        .canvas-panel {
+            display: grid;
+            grid-template-rows: auto auto 1fr auto;
+            padding: 16px;
+            gap: 12px;
+        }
+
+        .timeline {
+            display: grid;
+            gap: 8px;
+        }
+
+        .timeline-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: center;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            min-height: 420px;
+            border-radius: 20px;
+            border: 1px solid var(--line);
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.8), rgba(242,237,229,0.92)),
+                repeating-linear-gradient(0deg, transparent 0, transparent 35px, rgba(15, 23, 42, 0.035) 35px, rgba(15, 23, 42, 0.035) 36px),
+                repeating-linear-gradient(90deg, transparent 0, transparent 35px, rgba(15, 23, 42, 0.035) 35px, rgba(15, 23, 42, 0.035) 36px);
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            color: var(--muted);
+            font-size: 0.84rem;
+        }
+
+        .legend span::before {
+            content: "";
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 6px;
+            border-radius: 999px;
+            vertical-align: middle;
+            background: currentColor;
+        }
+
+        .details {
+            display: grid;
+            grid-template-rows: auto auto auto 1fr;
+            min-height: 0;
+        }
+
+        .detail-block {
+            margin: 0 16px 12px;
+            padding: 14px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.66);
+            border: 1px solid var(--line);
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px 12px;
+        }
+
+        .detail-grid div {
+            min-width: 0;
+        }
+
+        .detail-grid dt {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .detail-grid dd {
+            margin: 4px 0 0;
+            font-family: "IBM Plex Mono", monospace;
+            overflow-wrap: anywhere;
+        }
+
+        .detail-title {
+            font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+            font-size: 1.16rem;
+            font-weight: 700;
+        }
+
+        .detail-kicker {
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: 0.86rem;
+        }
+
+        .detail-section {
+            margin: 0 16px 12px;
+            padding: 14px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.66);
+            border: 1px solid var(--line);
+        }
+
+        .detail-section h3 {
+            margin: 0 0 10px;
+            font-size: 0.88rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+
+        .detail-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .detail-list-item {
+            display: grid;
+            gap: 2px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .detail-list-item:last-child {
+            padding-bottom: 0;
+            border-bottom: 0;
+        }
+
+        .detail-list-item strong {
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 0.88rem;
+        }
+
+        .tree-list {
+            overflow: auto;
+            padding: 0 16px 16px;
+        }
+
+        .tree-item {
+            margin-bottom: 10px;
+            padding: 12px 14px;
+            border-left: 4px solid var(--accent);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.7);
+        }
+
+        .status {
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 0.88rem;
+        }
+
+        @media (max-width: 1200px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            .hero {
+                grid-template-columns: 1fr;
+            }
+
+            canvas {
+                min-height: 320px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <section class="hero">
+            <div class="panel load-panel">
+                <h1>Schwi Inspector</h1>
+                <p class="subtitle">Load the JSON produced by <code>bricks::schwi::visualization_json(sim)</code>. The viewer synchronizes the event timeline, topology playback, and trace causality so delayed delivery and parent-child scheduling stay visible.</p>
+                <textarea id="json-input" spellcheck="false" placeholder='Paste visualization JSON here'></textarea>
+                <div class="toolbar">
+                    <button id="load-json">Load JSON</button>
+                    <button id="load-sample" class="secondary">Load Sample</button>
+                    <input id="file-input" type="file" accept=".json,application/json,text/plain">
+                </div>
+                <div class="status" id="status">No data loaded.</div>
+            </div>
+            <aside class="panel metrics" id="metrics"></aside>
+        </section>
+
+        <section class="layout">
+            <div class="column panel">
+                <div class="column-header">
+                    <h2>Timeline</h2>
+                    <p class="subtitle">Merged trace and log stream. Filter by device, kind, or type, then click any item to cross-highlight the topology and causality chain.</p>
+                </div>
+                <div class="filters">
+                    <input id="search" class="wide" type="search" placeholder="Search event type, device, source, target, or kind">
+                    <select id="device-filter">
+                        <option value="">All devices</option>
+                    </select>
+                    <select id="kind-filter">
+                        <option value="">All kinds</option>
+                    </select>
+                    <button id="prev-item" class="secondary small">Prev</button>
+                    <button id="next-item" class="secondary small">Next</button>
+                    <button id="clear-filters" class="ghost small">Reset</button>
+                </div>
+                <div class="filter-summary" id="filter-summary"></div>
+                <div class="list" id="event-list"></div>
+            </div>
+
+            <div class="column panel">
+                <div class="canvas-panel">
+                    <div>
+                        <h2>Topology</h2>
+                        <p class="subtitle">Scrub simulation time to reconstruct positions and reveal broadcasts, drops, and in-flight deliveries.</p>
+                    </div>
+                    <div class="timeline">
+                        <div class="timeline-row">
+                            <strong id="current-time">t = 0 ns</strong>
+                            <span class="muted" id="selection-summary">No selection</span>
+                        </div>
+                        <input id="time-slider" type="range" min="0" max="0" value="0" step="1">
+                    </div>
+                    <div class="state-summary" id="state-summary"></div>
+                    <canvas id="topology"></canvas>
+                    <div class="legend">
+                        <span style="color: var(--accent)">Delivered</span>
+                        <span style="color: var(--warn)">Dropped</span>
+                        <span style="color: var(--trace)">In flight</span>
+                        <span style="color: var(--trace)">Trace selection</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="column panel details">
+                <div class="column-header">
+                    <h2>Causality</h2>
+                    <p class="subtitle">Parent and child trace relationships, plus the log entries produced by the selected item.</p>
+                </div>
+                <div class="detail-block" id="detail-summary"></div>
+                <div class="detail-section" id="detail-state"></div>
+                <div class="tree-list" id="causality-tree"></div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const sampleData = {
+            format: "bricks.schwi.visualization",
+            schema_version: 1,
+            time_unit_ns: 1,
+            config: { radio: { reachability_threshold: -40, delivery_delay_ns: 5000000 } },
+            devices: [
+                { id: 0, state_key: "state_0", state_name: "NodeState", has_position: true, current_position: { x: 1, y: 2 } },
+                { id: 1, state_key: "state_0", state_name: "NodeState", has_position: true, current_position: { x: 5, y: 0 } }
+            ],
+            trace: [
+                { id: 1, parent_id: null, time_ns: 10000000, kind: "TargetedEvent", target: 0, event_key: "event_0", event_name: "ButtonPress" },
+                { id: 2, parent_id: 1, time_ns: 15000000, kind: "TargetedEvent", target: 1, event_key: "event_1", event_name: "PacketReceived" },
+                { id: 3, parent_id: null, time_ns: 12000000, kind: "TargetedEvent", target: 0, event_key: "event_2", event_name: "MoveNode" }
+            ],
+            log: [
+                { kind: "DeviceAdded", time_ns: 0, source: 0, target: null, peer: null, rssi: 0, payload_size: 0, position: null, caused_by_event_id: null },
+                { kind: "DeviceAdded", time_ns: 0, source: 1, target: null, peer: null, rssi: 0, payload_size: 0, position: null, caused_by_event_id: null },
+                { kind: "DeviceMoved", time_ns: 0, source: 0, target: null, peer: null, rssi: 0, payload_size: 0, position: { x: 0, y: 0 }, caused_by_event_id: null },
+                { kind: "DeviceMoved", time_ns: 0, source: 1, target: null, peer: null, rssi: 0, payload_size: 0, position: { x: 5, y: 0 }, caused_by_event_id: null },
+                { kind: "TargetedEventDispatched", time_ns: 10000000, source: 0, target: 0, peer: null, rssi: 0, payload_size: 0, position: null, caused_by_event_id: null },
+                { kind: "BroadcastSent", time_ns: 10000000, source: 0, target: null, peer: null, rssi: 0, payload_size: 1, position: null, caused_by_event_id: 1 },
+                { kind: "PacketDelivered", time_ns: 15000000, source: 0, target: 1, peer: null, rssi: -35, payload_size: 1, position: null, caused_by_event_id: 1 },
+                { kind: "TargetedEventDispatched", time_ns: 12000000, source: 0, target: 0, peer: null, rssi: 0, payload_size: 0, position: null, caused_by_event_id: null },
+                { kind: "DeviceMoved", time_ns: 12000000, source: 0, target: null, peer: null, rssi: 0, payload_size: 0, position: { x: 1, y: 2 }, caused_by_event_id: 3 },
+                { kind: "TargetedEventDispatched", time_ns: 15000000, source: 1, target: 1, peer: null, rssi: 0, payload_size: 0, position: null, caused_by_event_id: 2 }
+            ]
+        };
+
+        const state = {
+            data: null,
+            merged: [],
+            selection: null,
+            timeNs: 0,
+            focusedDeviceId: null
+        };
+
+        const refs = {
+            input: document.getElementById("json-input"),
+            file: document.getElementById("file-input"),
+            load: document.getElementById("load-json"),
+            sample: document.getElementById("load-sample"),
+            status: document.getElementById("status"),
+            metrics: document.getElementById("metrics"),
+            list: document.getElementById("event-list"),
+            filterSummary: document.getElementById("filter-summary"),
+            search: document.getElementById("search"),
+            device: document.getElementById("device-filter"),
+            kind: document.getElementById("kind-filter"),
+            prevItem: document.getElementById("prev-item"),
+            nextItem: document.getElementById("next-item"),
+            clearFilters: document.getElementById("clear-filters"),
+            slider: document.getElementById("time-slider"),
+            time: document.getElementById("current-time"),
+            stateSummary: document.getElementById("state-summary"),
+            selectionSummary: document.getElementById("selection-summary"),
+            detailSummary: document.getElementById("detail-summary"),
+            detailState: document.getElementById("detail-state"),
+            causalityTree: document.getElementById("causality-tree"),
+            canvas: document.getElementById("topology")
+        };
+
+        const ctx = refs.canvas.getContext("2d");
+
+        function ns(value) {
+            return `${value.toLocaleString()} ns`;
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#39;");
+        }
+
+        function metricCard(label, value) {
+            return `<div class="metric"><strong>${value}</strong><span>${label}</span></div>`;
+        }
+
+        function classify(item) {
+            if (item.stream === "trace") {
+                if (item.kind === "TargetedEvent") return "trace-targeted";
+                if (item.kind === "GlobalEvent") return "trace-global";
+                return "trace-action";
+            }
+            if (item.kind === "PacketDropped") return "log-drop";
+            if (item.kind === "PacketDelivered") return "log-delivery";
+            return "";
+        }
+
+        function mergeData(data) {
+            const traceItems = data.trace.map((entry) => ({
+                id: `trace-${entry.id}`,
+                stream: "trace",
+                time_ns: entry.time_ns,
+                kind: entry.kind,
+                label: entry.event_name ?? entry.event_type ?? entry.event_key ?? "event",
+                entry
+            }));
+            const logItems = data.log.map((entry, index) => ({
+                id: `log-${index}`,
+                stream: "log",
+                time_ns: entry.time_ns,
+                kind: entry.kind,
+                label: entry.kind,
+                entry
+            }));
+            return [...traceItems, ...logItems].sort((a, b) => a.time_ns - b.time_ns || a.id.localeCompare(b.id));
+        }
+
+        function normalizeData(data) {
+            return {
+                ...data,
+                format: data.format ?? "unknown",
+                schema_version: data.schema_version ?? 0,
+                traceById: new Map(data.trace.map((entry) => [entry.id, entry])),
+                merged: mergeData(data)
+            };
+        }
+
+        function preferredInitialSelection(data) {
+            const preferredKinds = new Set(["PacketDelivered", "PacketDropped", "BroadcastSent"]);
+            return data.merged.find((item) => preferredKinds.has(item.kind))
+                || data.merged.find((item) => item.stream === "trace")
+                || data.merged[0]
+                || null;
+        }
+
+        function updateFilters() {
+            const devices = new Set();
+            const kinds = new Set();
+            state.data.merged.forEach((item) => {
+                kinds.add(item.kind);
+                if (item.stream === "trace" && item.entry.target !== null) devices.add(item.entry.target);
+                if (item.stream === "log") {
+                    devices.add(item.entry.source);
+                    if (item.entry.target !== null && item.entry.target !== undefined) devices.add(item.entry.target);
+                }
+            });
+
+            refs.device.innerHTML = `<option value="">All devices</option>${[...devices].sort((a, b) => a - b).map((id) => `<option value="${id}">Device ${id}</option>`).join("")}`;
+            refs.kind.innerHTML = `<option value="">All kinds</option>${[...kinds].sort().map((kind) => `<option value="${kind}">${kind}</option>`).join("")}`;
+        }
+
+        function activeItems() {
+            if (!state.data) return [];
+            const query = refs.search.value.trim().toLowerCase();
+            const deviceFilter = refs.device.value;
+            const kindFilter = refs.kind.value;
+
+            return state.data.merged.filter((item) => {
+                if (kindFilter && item.kind !== kindFilter) return false;
+                if (query) {
+                    const haystack = [
+                        item.kind,
+                        item.label,
+                        item.stream === "trace" ? `device ${item.entry.target ?? ""}` : "",
+                        item.stream === "log" ? `source ${item.entry.source ?? ""} target ${item.entry.target ?? ""}` : ""
+                    ].join(" ").toLowerCase();
+                    if (!haystack.includes(query)) return false;
+                }
+                if (!deviceFilter) return true;
+                const device = Number(deviceFilter);
+                if (item.stream === "trace") return item.entry.target === device;
+                return item.entry.source === device || item.entry.target === device;
+            });
+        }
+
+        function visibleItems() {
+            const items = activeItems();
+            if (state.selection && !items.some((item) => item.id === state.selection.id)) {
+                state.selection = items[0] || null;
+            }
+            return items;
+        }
+
+        function renderMetrics() {
+            const drops = state.data.log.filter((entry) => entry.kind === "PacketDropped").length;
+            const deliveries = state.data.log.filter((entry) => entry.kind === "PacketDelivered").length;
+            refs.metrics.innerHTML = [
+                metricCard("Devices", state.data.devices.length),
+                metricCard("Trace entries", state.data.trace.length),
+                metricCard("Log entries", state.data.log.length),
+                metricCard("Deliveries", deliveries),
+                metricCard("Drops", drops),
+                metricCard("Delay", ns(state.data.config.radio.delivery_delay_ns))
+            ].join("");
+        }
+
+        function selectItem(item) {
+            state.selection = item;
+            if (item) state.timeNs = item.time_ns;
+            refs.slider.value = String(state.timeNs);
+            render();
+        }
+
+        function renderList() {
+            const items = visibleItems();
+            refs.filterSummary.innerHTML = [
+                `<span class="chip">${items.length} visible events</span>`,
+                refs.device.value ? `<span class="chip">Device ${escapeHtml(refs.device.value)}</span>` : "",
+                refs.kind.value ? `<span class="chip">${escapeHtml(refs.kind.value)}</span>` : "",
+                refs.search.value.trim() ? `<span class="chip">Search: ${escapeHtml(refs.search.value.trim())}</span>` : ""
+            ].filter(Boolean).join("");
+            refs.list.innerHTML = items.map((item) => {
+                const selected = state.selection?.id === item.id ? "selected" : "";
+                const meta = item.stream === "trace"
+                    ? `${item.kind}${item.entry.target !== null ? ` · device ${item.entry.target}` : ""}`
+                    : `${item.kind}${item.entry.source !== null && item.entry.source !== undefined ? ` · src ${item.entry.source}` : ""}${item.entry.target !== null && item.entry.target !== undefined ? ` → ${item.entry.target}` : ""}`;
+                const badges = [];
+                if (item.stream === "trace" && item.entry.parent_id !== null) badges.push("child");
+                if (item.stream === "log" && item.entry.caused_by_event_id !== null) badges.push(`cause ${item.entry.caused_by_event_id}`);
+                if (item.stream === "log" && item.entry.rssi) badges.push(`RSSI ${item.entry.rssi}`);
+                return `
+                    <button class="event-item ${selected}" data-id="${item.id}">
+                        <span class="event-kind ${classify(item)}"></span>
+                        <span>
+                            <div class="event-title">${escapeHtml(item.label)}</div>
+                            <div class="event-meta">${escapeHtml(meta)}</div>
+                            <div class="event-badges">${badges.map((badge) => `<span class="event-badge">${escapeHtml(badge)}</span>`).join("")}</div>
+                        </span>
+                        <span class="event-time">${ns(item.time_ns)}</span>
+                    </button>
+                `;
+            }).join("");
+
+            refs.list.querySelectorAll(".event-item").forEach((node) => {
+                node.addEventListener("click", () => {
+                    const item = items.find((candidate) => candidate.id === node.dataset.id);
+                    selectItem(item);
+                });
+            });
+        }
+
+        function devicePositionsAt(timeNs) {
+            const positions = new Map();
+            state.data.log
+                .filter((entry) => entry.kind === "DeviceMoved" && entry.position && entry.time_ns <= timeNs)
+                .sort((a, b) => a.time_ns - b.time_ns)
+                .forEach((entry) => {
+                    positions.set(entry.source, { ...entry.position });
+                });
+            return positions;
+        }
+
+        function selectedTraceId() {
+            if (!state.selection) return null;
+            if (state.selection.stream === "trace") return state.selection.entry.id;
+            return state.selection.entry.caused_by_event_id;
+        }
+
+        function networkLinksAt(timeNs) {
+            const delay = state.data.config?.radio?.delivery_delay_ns ?? 0;
+            const decay = Math.max(delay * 2, 5000000);
+            const selectedCause = selectedTraceId();
+            const sendsByCause = new Map(
+                state.data.log
+                    .filter((entry) => entry.kind === "BroadcastSent" && entry.caused_by_event_id !== null)
+                    .map((entry) => [entry.caused_by_event_id, entry])
+            );
+
+            return state.data.log
+                .filter((entry) => entry.kind === "PacketDelivered" || entry.kind === "PacketDropped")
+                .map((entry) => {
+                    const send = sendsByCause.get(entry.caused_by_event_id);
+                    const sendTime = send?.time_ns ?? entry.time_ns;
+                    if (timeNs < sendTime)
+                        return null;
+                    const selected = selectedCause !== null && entry.caused_by_event_id === selectedCause;
+                    const active = timeNs <= entry.time_ns;
+                    const age = active ? 0 : timeNs - entry.time_ns;
+                    if (!selected && age > decay)
+                        return null;
+                    return {
+                        ...entry,
+                        phase: entry.kind === "PacketDropped" ? "dropped" : (active ? "in_flight" : "delivered"),
+                        progress: entry.kind === "PacketDelivered" && entry.time_ns > sendTime
+                            ? Math.max(0, Math.min(1, (timeNs - sendTime) / (entry.time_ns - sendTime)))
+                            : 1,
+                        highlighted: selected
+                    };
+                })
+                .filter(Boolean);
+        }
+
+        function drawTopology() {
+            const { width, height } = refs.canvas.getBoundingClientRect();
+            refs.canvas.width = width * devicePixelRatio;
+            refs.canvas.height = height * devicePixelRatio;
+            ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+            ctx.clearRect(0, 0, width, height);
+
+            if (!state.data) return;
+
+            const positions = devicePositionsAt(state.timeNs);
+            const devices = state.data.devices.filter((device) => positions.has(device.id));
+            if (!devices.length) {
+                ctx.fillStyle = "#5f6f74";
+                ctx.font = '16px "IBM Plex Sans"';
+                ctx.fillText("No positioned devices at this time.", 20, 40);
+                return;
+            }
+
+            const xs = devices.map((device) => positions.get(device.id).x);
+            const ys = devices.map((device) => positions.get(device.id).y);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+            const pad = 60;
+            const scaleX = (value) => pad + ((value - minX) / Math.max(maxX - minX, 1)) * (width - pad * 2);
+            const scaleY = (value) => pad + ((value - minY) / Math.max(maxY - minY, 1)) * (height - pad * 2);
+
+            const links = networkLinksAt(state.timeNs);
+            refs.stateSummary.innerHTML = [
+                `<span class="chip">${devices.length} visible devices</span>`,
+                `<span class="chip">${links.length} active links</span>`,
+                state.selection ? `<span class="chip">Focus: ${escapeHtml(state.selection.label)}</span>` : ""
+            ].filter(Boolean).join("");
+
+            links.forEach((entry) => {
+                const from = positions.get(entry.source);
+                const to = positions.get(entry.target);
+                if (!from || !to) return;
+                const color = entry.phase === "dropped"
+                    ? "rgba(194, 65, 12, 0.82)"
+                    : (entry.phase === "in_flight" ? "rgba(21, 94, 117, 0.82)" : "rgba(15, 118, 110, 0.82)");
+                ctx.strokeStyle = color;
+                ctx.lineWidth = entry.highlighted ? 5 : 3;
+                ctx.globalAlpha = entry.highlighted ? 1 : (entry.phase === "delivered" ? 0.38 : 0.75);
+                ctx.setLineDash(entry.phase === "dropped" ? [10, 7] : (entry.phase === "in_flight" ? [8, 6] : []));
+                ctx.beginPath();
+                ctx.moveTo(scaleX(from.x), scaleY(from.y));
+                if (entry.phase === "in_flight") {
+                    const ix = scaleX(from.x) + (scaleX(to.x) - scaleX(from.x)) * entry.progress;
+                    const iy = scaleY(from.y) + (scaleY(to.y) - scaleY(from.y)) * entry.progress;
+                    ctx.lineTo(ix, iy);
+                } else {
+                    ctx.lineTo(scaleX(to.x), scaleY(to.y));
+                }
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                ctx.setLineDash([]);
+                const midX = entry.phase === "in_flight"
+                    ? scaleX(from.x) + (scaleX(to.x) - scaleX(from.x)) * entry.progress
+                    : (scaleX(from.x) + scaleX(to.x)) / 2;
+                const midY = entry.phase === "in_flight"
+                    ? scaleY(from.y) + (scaleY(to.y) - scaleY(from.y)) * entry.progress
+                    : (scaleY(from.y) + scaleY(to.y)) / 2;
+                ctx.fillStyle = color;
+                ctx.font = '12px "IBM Plex Mono"';
+                ctx.fillText(`${entry.phase.replace("_", " ")} ${entry.rssi}`, midX + 8, midY - 8);
+            });
+
+            devices.forEach((device) => {
+                const position = positions.get(device.id);
+                const x = scaleX(position.x);
+                const y = scaleY(position.y);
+                const selected = state.selection && (
+                    (state.selection.stream === "trace" && state.selection.entry.target === device.id) ||
+                    (state.selection.stream === "log" && (state.selection.entry.source === device.id || state.selection.entry.target === device.id))
+                );
+
+                ctx.fillStyle = selected ? "rgba(21, 94, 117, 0.18)" : "rgba(29, 42, 47, 0.08)";
+                ctx.beginPath();
+                ctx.arc(x, y, selected ? 24 : 18, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = selected ? "#155e75" : "#1d2a2f";
+                ctx.beginPath();
+                ctx.arc(x, y, 11, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = "#102126";
+                ctx.font = '13px "IBM Plex Sans"';
+                ctx.fillText(`D${device.id}`, x + 16, y - 8);
+                ctx.fillStyle = "#5f6f74";
+                ctx.font = '12px "IBM Plex Mono"';
+                ctx.fillText(`(${position.x}, ${position.y})`, x + 16, y + 10);
+            });
+        }
+
+        function traceChain(entry) {
+            if (!entry) return [];
+            const items = [];
+            let cursor = entry;
+            while (cursor) {
+                items.push(cursor);
+                cursor = cursor.parent_id ? state.data.traceById.get(cursor.parent_id) : null;
+            }
+            return items.reverse();
+        }
+
+        function renderDetails() {
+            if (!state.data) {
+                refs.detailSummary.innerHTML = `<span class="muted">Load JSON to inspect a simulation.</span>`;
+                refs.detailState.innerHTML = "";
+                refs.causalityTree.innerHTML = "";
+                refs.selectionSummary.textContent = "No selection";
+                return;
+            }
+
+            refs.selectionSummary.textContent = state.selection ? `${state.selection.stream} · ${state.selection.kind}` : "No selection";
+            if (!state.selection) {
+                refs.detailSummary.innerHTML = `<span class="muted">Select a timeline item to inspect its trace chain and derived log entries.</span>`;
+                refs.detailState.innerHTML = "";
+                refs.causalityTree.innerHTML = "";
+                return;
+            }
+
+            const selection = state.selection;
+            const traceEntry = selection.stream === "trace"
+                ? selection.entry
+                : (selection.entry.caused_by_event_id ? state.data.traceById.get(selection.entry.caused_by_event_id) : null);
+            const causedLogs = traceEntry ? state.data.log.filter((entry) => entry.caused_by_event_id === traceEntry.id) : [];
+            const children = traceEntry ? state.data.trace.filter((entry) => entry.parent_id === traceEntry.id) : [];
+
+            refs.detailSummary.innerHTML = `
+                <div class="detail-grid">
+                    <div><dt>Selection</dt><dd>${escapeHtml(selection.kind)}</dd></div>
+                    <div><dt>Time</dt><dd>${ns(selection.time_ns)}</dd></div>
+                    <div><dt>Primary label</dt><dd>${escapeHtml(selection.label)}</dd></div>
+                    <div><dt>Derived logs</dt><dd>${causedLogs.length}</dd></div>
+                </div>
+            `;
+
+            if (selection.stream === "log") {
+                refs.detailState.innerHTML = `
+                    <h3>Log Payload</h3>
+                    <div class="detail-list">
+                        <div class="detail-list-item"><strong>source</strong><span>${escapeHtml(selection.entry.source ?? "null")}</span></div>
+                        <div class="detail-list-item"><strong>target</strong><span>${escapeHtml(selection.entry.target ?? "null")}</span></div>
+                        <div class="detail-list-item"><strong>caused_by_event_id</strong><span>${escapeHtml(selection.entry.caused_by_event_id ?? "null")}</span></div>
+                        <div class="detail-list-item"><strong>payload_size</strong><span>${escapeHtml(selection.entry.payload_size)}</span></div>
+                    </div>
+                `;
+            } else {
+                refs.detailState.innerHTML = `
+                    <h3>Trace Payload</h3>
+                    <div class="detail-list">
+                        <div class="detail-list-item"><strong>event_key</strong><span>${escapeHtml(selection.entry.event_key ?? "n/a")}</span></div>
+                        <div class="detail-list-item"><strong>event_name</strong><span>${escapeHtml(selection.entry.event_name ?? selection.label)}</span></div>
+                        <div class="detail-list-item"><strong>target</strong><span>${escapeHtml(selection.entry.target ?? "null")}</span></div>
+                    </div>
+                `;
+            }
+
+            const chain = traceChain(traceEntry);
+            const parts = [];
+            if (chain.length) {
+                parts.push(chain.map((entry) => `
+                    <div class="tree-item">
+                        <strong>${escapeHtml(entry.event_name ?? entry.event_type ?? entry.event_key ?? "event")}</strong>
+                        <div class="muted">${escapeHtml(entry.kind)} at ${ns(entry.time_ns)}${entry.target !== null ? ` · device ${entry.target}` : ""}</div>
+                    </div>
+                `).join(""));
+            }
+            if (children.length) {
+                parts.push(children.map((entry) => `
+                    <div class="tree-item" style="border-left-color: var(--trace);">
+                        <strong>Child: ${escapeHtml(entry.event_name ?? entry.event_type ?? entry.event_key ?? "event")}</strong>
+                        <div class="muted">${escapeHtml(entry.kind)} at ${ns(entry.time_ns)}${entry.target !== null ? ` · device ${entry.target}` : ""}</div>
+                    </div>
+                `).join(""));
+            }
+            if (causedLogs.length) {
+                parts.push(causedLogs.map((entry) => `
+                    <div class="tree-item" style="border-left-color: ${entry.kind === "PacketDropped" ? "var(--warn)" : "var(--accent)"};">
+                        <strong>${escapeHtml(entry.kind)}</strong>
+                        <div class="muted">t=${ns(entry.time_ns)}${entry.source !== null && entry.source !== undefined ? ` · src ${entry.source}` : ""}${entry.target !== null && entry.target !== undefined ? ` → ${entry.target}` : ""}${entry.rssi ? ` · RSSI ${entry.rssi}` : ""}</div>
+                    </div>
+                `).join(""));
+            }
+            refs.causalityTree.innerHTML = parts.join("") || `<div class="tree-item"><span class="muted">No causality data for this selection.</span></div>`;
+        }
+
+        function render() {
+            if (!state.data) return;
+            refs.time.textContent = `t = ${ns(state.timeNs)}`;
+            renderList();
+            renderDetails();
+            drawTopology();
+        }
+
+        function loadData(raw) {
+            try {
+                const parsed = normalizeData(JSON.parse(raw));
+                if (parsed.format !== "bricks.schwi.visualization")
+                    throw new Error(`unsupported format: ${parsed.format}`);
+                state.data = parsed;
+                state.timeNs = Math.max(0, ...parsed.merged.map((item) => item.time_ns));
+                refs.slider.max = String(state.timeNs);
+                refs.slider.value = String(state.timeNs);
+                state.selection = preferredInitialSelection(parsed);
+                updateFilters();
+                renderMetrics();
+                refs.status.textContent = `Loaded ${parsed.devices.length} devices, ${parsed.trace.length} trace entries, and ${parsed.log.length} log entries from schema v${parsed.schema_version}.`;
+                render();
+            } catch (error) {
+                refs.status.textContent = `Failed to parse JSON: ${error.message}`;
+            }
+        }
+
+        refs.load.addEventListener("click", () => loadData(refs.input.value));
+        refs.sample.addEventListener("click", () => {
+            const formatted = JSON.stringify(sampleData, null, 2);
+            refs.input.value = formatted;
+            loadData(formatted);
+        });
+        refs.file.addEventListener("change", async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const text = await file.text();
+            refs.input.value = text;
+            loadData(text);
+        });
+        refs.search.addEventListener("input", render);
+        refs.device.addEventListener("change", render);
+        refs.kind.addEventListener("change", render);
+        refs.clearFilters.addEventListener("click", () => {
+            refs.search.value = "";
+            refs.device.value = "";
+            refs.kind.value = "";
+            render();
+        });
+        refs.prevItem.addEventListener("click", () => {
+            const items = visibleItems();
+            if (!items.length) return;
+            const index = Math.max(0, items.findIndex((item) => item.id === state.selection?.id) - 1);
+            selectItem(items[index] ?? items[0]);
+        });
+        refs.nextItem.addEventListener("click", () => {
+            const items = visibleItems();
+            if (!items.length) return;
+            const currentIndex = items.findIndex((item) => item.id === state.selection?.id);
+            const index = currentIndex < 0 ? 0 : Math.min(items.length - 1, currentIndex + 1);
+            selectItem(items[index]);
+        });
+        refs.slider.addEventListener("input", () => {
+            state.timeNs = Number(refs.slider.value);
+            render();
+        });
+    </script>
+</body>
+</html>
