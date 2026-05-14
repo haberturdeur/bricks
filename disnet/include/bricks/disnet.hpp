@@ -3,6 +3,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <ostream>
 #include <utility>
 #include <functional>
 #include <vector>
@@ -10,9 +11,10 @@
 namespace bricks::disnet {
 
 template <typename T>
-concept Address = requires(T address, const T other) {
+concept Address = requires(T address, const T other, std::ostream& os) {
     { address == other } -> std::convertible_to<bool>;
     { address <=> other } -> std::same_as<std::strong_ordering>;
+    { os << address } -> std::same_as<std::ostream&>;
 };
 
 template <Address AddressT>

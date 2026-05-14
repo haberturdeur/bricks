@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <ostream>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,10 @@ struct SchwiAddress {
     std::uint8_t value = 0;
 
     auto operator<=>(const SchwiAddress&) const = default;
+
+    friend std::ostream& operator<<(std::ostream& os, const SchwiAddress& addr) {
+        return os << static_cast<unsigned>(addr.value);
+    }
 };
 
 class SchwiTransport {

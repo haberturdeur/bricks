@@ -3,6 +3,8 @@
 #include <compare>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
+#include <ostream>
 
 namespace bricks::disnet {
 
@@ -28,6 +30,20 @@ struct MacAddress {
         if (cmp > 0)
             return std::strong_ordering::greater;
         return std::strong_ordering::equal;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const MacAddress& addr) {
+        auto flags = os.flags();
+        auto fill = os.fill();
+        os << std::hex << std::uppercase << std::setfill('0');
+        for (int i = 0; i < 6; ++i) {
+            if (i > 0)
+                os << ':';
+            os << std::setw(2) << static_cast<unsigned>(addr.m_data[i]);
+        }
+        os.flags(flags);
+        os.fill(fill);
+        return os;
     }
 };
 

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <ostream>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,10 @@ struct FakeAddress {
     std::uint8_t value = 0;
 
     auto operator<=>(const FakeAddress&) const = default;
+
+    friend std::ostream& operator<<(std::ostream& os, const FakeAddress& addr) {
+        return os << static_cast<unsigned>(addr.value);
+    }
 };
 
 struct FakeTransport {
