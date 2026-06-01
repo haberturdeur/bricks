@@ -1,0 +1,31 @@
+dependencies:
+  Arduino_MFRC522v2:
+    component_hash: ef56a1b780b4897dbb2aea30f3115138fc7d21a261c4f085c34c14f918ea7aca
+    dependencies:
+    - name: idf
+      version: '>=5.4.0'
+    source:
+      git: https://github.com/haberturdeur/Arduino_MFRC522v2.git
+      path: .
+      type: git
+    version: e773b47b1d24fe64024f1a46e4912e654475e23f
+  idf:
+    source:
+      type: idf
+    version: 5.5.4
+  mfrc522:
+    dependencies:
+    - name: idf
+      version: '>=5.2.0'
+    - git: https://github.com/haberturdeur/Arduino_MFRC522v2.git
+      name: Arduino_MFRC522v2
+    source:
+      path: /home/tom/Projects/bricks/mfrc522
+      type: local
+    version: '*'
+direct_dependencies:
+- idf
+- mfrc522
+manifest_hash: 1d6d470344a107de2e9630e185f937e628750e3d32c69fa93abfde8d0c2ffc88
+target: esp32s3
+version: 2.0.0

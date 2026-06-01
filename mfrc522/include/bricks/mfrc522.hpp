@@ -3,7 +3,11 @@
 #include <MFRC522Driver.h>
 #include <MFRC522v2.h>
 
+#if __has_include(<driver/gpio.h>)
 #include <driver/gpio.h>
+#else
+using gpio_num_t = int;
+#endif
 
 #include <array>
 #include <chrono>

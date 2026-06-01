@@ -1,0 +1,6 @@
+dependencies:
+  idf:
+    version: ">=5.2.0"
+
+  mfrc522:
+    override_path: ../..
