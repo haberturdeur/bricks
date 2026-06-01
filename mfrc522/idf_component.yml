@@ -1,0 +1,6 @@
+dependencies:
+  idf:
+    version: ">=5.2.0"
+
+  Arduino_MFRC522v2:
+    git: https://github.com/haberturdeur/Arduino_MFRC522v2.git
