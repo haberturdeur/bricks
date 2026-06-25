@@ -1,6 +1,7 @@
 #pragma once
 
-#include "bricks/disnet.hpp"
+#include "bricks/disnet/transport.hpp"
+#include "bricks/utility/packed_size.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -35,9 +36,62 @@ public:
 
     static_assert(std::is_trivially_copyable_v<Address>);
 
+private:
+    using TimePoint = typename ClockT::time_point;
+
+    enum class FrameType : std::uint8_t {
+        Data = 0,
+        Preq = 1,
+        Prep = 2,
+        Perr = 3,
+    };
+
+    static constexpr std::uint8_t s_flag_root = 1 << 0;
+    static constexpr std::uint8_t s_flag_destination_only = 1 << 1;
+
+    struct DataHeader {
+        FrameType type;
+        std::uint8_t ttl;
+        Address source;
+        Address target;
+        std::uint32_t source_seq;
+    };
+
+    struct PreqHeader {
+        FrameType type;
+        std::uint8_t ttl;
+        std::uint8_t flags;
+        std::uint32_t preq_id;
+        Address originator;
+        std::uint32_t originator_seq;
+        Address target;
+        std::uint32_t target_seq;
+        std::uint32_t metric;
+    };
+
+    struct PrepHeader {
+        FrameType type;
+        std::uint8_t ttl;
+        Address originator;
+        Address target;
+        std::uint32_t target_seq;
+        std::uint32_t metric;
+    };
+
+    struct PerrHeader {
+        FrameType type;
+        Address destination;
+        std::uint32_t destination_seq;
+    };
+
+    static constexpr std::size_t s_data_header_size = packed_size<DataHeader>;
+    static constexpr std::size_t s_preq_header_size = packed_size<PreqHeader>;
+    static constexpr std::size_t s_prep_header_size = packed_size<PrepHeader>;
+    static constexpr std::size_t s_perr_header_size = packed_size<PerrHeader>;
+
+public:
     static constexpr std::size_t max_payload_size =
-        Transport::max_payload_size - (sizeof(std::uint8_t) + sizeof(std::uint8_t) + sizeof(Address) +
-                                       sizeof(Address) + sizeof(std::uint32_t));
+        Transport::max_payload_size - s_data_header_size;
     static_assert(max_payload_size > 0 && max_payload_size < Transport::max_payload_size,
                   "Transport::max_payload_size is too small to hold an HWMP data frame header");
 
@@ -176,27 +230,6 @@ public:
     }
 
 private:
-    using TimePoint = typename ClockT::time_point;
-
-    enum class FrameType : std::uint8_t {
-        Data = 0,
-        Preq = 1,
-        Prep = 2,
-        Perr = 3,
-    };
-
-    static constexpr std::uint8_t s_flag_root = 1 << 0;
-    static constexpr std::uint8_t s_flag_destination_only = 1 << 1;
-    static constexpr std::size_t s_data_header_size =
-        sizeof(FrameType) + sizeof(std::uint8_t) + sizeof(Address) + sizeof(Address) + sizeof(std::uint32_t);
-    static constexpr std::size_t s_preq_header_size =
-        sizeof(FrameType) + sizeof(std::uint8_t) + sizeof(std::uint8_t) + sizeof(std::uint32_t) + sizeof(Address) +
-        sizeof(std::uint32_t) + sizeof(Address) + sizeof(std::uint32_t) + sizeof(std::uint32_t);
-    static constexpr std::size_t s_prep_header_size =
-        sizeof(FrameType) + sizeof(std::uint8_t) + sizeof(Address) + sizeof(Address) + sizeof(std::uint32_t) +
-        sizeof(std::uint32_t);
-    static constexpr std::size_t s_perr_header_size =
-        sizeof(FrameType) + sizeof(Address) + sizeof(std::uint32_t);
     static constexpr std::size_t s_seen_capacity = 256;
 
     struct Route {

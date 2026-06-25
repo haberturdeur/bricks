@@ -13,7 +13,7 @@ endif()
 
 function(add_disnet_host_test target)
     add_executable(${target} ${ARGN})
-    target_include_directories(${target} PRIVATE ../include)
+    target_include_directories(${target} PRIVATE ../include ../../utility/include)
     if (TARGET schwi)
         target_link_libraries(${target} PRIVATE schwi)
     endif()
@@ -28,6 +28,7 @@ add_executable(disnet_esp_now_regression
 )
 target_include_directories(disnet_esp_now_regression PRIVATE
     ../include
+    ../../utility/include
     shims
 )
 
@@ -36,6 +37,7 @@ add_executable(disnet_hwmp_regression
 )
 target_include_directories(disnet_hwmp_regression PRIVATE
     ../include
+    ../../utility/include
 )
 
 add_disnet_host_test(disnet_hwmp_protocol_tests hwmp_protocol_tests.cpp)

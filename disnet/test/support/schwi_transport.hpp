@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bricks/disnet.hpp"
+#include "bricks/disnet/transport.hpp"
 #include "bricks/schwi.hpp"
 
 #include <cassert>
