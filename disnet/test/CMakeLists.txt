@@ -46,6 +46,7 @@ add_disnet_host_test(disnet_hwmp_error_dedup_tests hwmp_error_dedup_tests.cpp)
 add_disnet_host_test(disnet_hwmp_schwi_reactive_tests hwmp_schwi_reactive_tests.cpp)
 add_disnet_host_test(disnet_hwmp_schwi_root_tests hwmp_schwi_root_tests.cpp)
 add_disnet_host_test(disnet_schwi_router_tests schwi_router_tests.cpp)
+add_disnet_host_test(disnet_mux_protocol_tests mux_protocol_tests.cpp)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(disnet_esp_now_regression PRIVATE -Wall -Wextra -Wpedantic)
