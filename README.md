@@ -11,4 +11,5 @@ A collection of **ESP-IDF/C++ components** and support packages for various proj
 - **exceptions** - Exception helpers for ESP-IDF, including traced exceptions and IDF error-to-exception conversion.
 - **glaze** - ESP-IDF wrapper/component packaging for upstream `glaze`.
 - **schwi** - Header-only host-side discrete-event network simulator with trace/log + visualization export.
+- **utility** - Shared header-only utilities, including compile-time packed wire-size calculation.
 
