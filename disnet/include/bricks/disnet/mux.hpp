@@ -9,7 +9,6 @@
 #include <functional>
 #include <optional>
 #include <span>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
