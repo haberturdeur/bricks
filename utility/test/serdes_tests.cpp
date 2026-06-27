@@ -52,21 +52,21 @@ struct NotSerializable {
     std::uint8_t value = 0;
 };
 
-static_assert(bricks::Serializable<member_model::Packet>);
-static_assert(bricks::Serializable<adl_model::Packet>);
-static_assert(!bricks::Serializable<NotSerializable>);
+static_assert(bricks::utility::Serializable<member_model::Packet>);
+static_assert(bricks::utility::Serializable<adl_model::Packet>);
+static_assert(!bricks::utility::Serializable<NotSerializable>);
 
 int main() {
     {
-        auto bytes = bricks::serialize(member_model::Packet{.value = 42});
-        auto packet = bricks::deserialize<member_model::Packet>(bytes);
+        auto bytes = bricks::utility::serialize(member_model::Packet{.value = 42});
+        auto packet = bricks::utility::deserialize<member_model::Packet>(bytes);
         assert(packet.has_value());
         assert(packet->value == 42);
     }
 
     {
-        auto bytes = bricks::serialize(adl_model::Packet{.value = 1234});
-        auto packet = bricks::deserialize<adl_model::Packet>(bytes);
+        auto bytes = bricks::utility::serialize(adl_model::Packet{.value = 1234});
+        auto packet = bricks::utility::deserialize<adl_model::Packet>(bytes);
         assert(packet.has_value());
         assert(packet->value == 1234);
     }

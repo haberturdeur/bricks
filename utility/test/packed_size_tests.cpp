@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <iostream>
 
-using namespace bricks;
+using namespace bricks::utility;
 
 // --- Fundamentals ---
 

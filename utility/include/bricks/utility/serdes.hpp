@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <vector>
 
-namespace bricks {
+namespace bricks::utility {
 
 namespace detail {
 
@@ -59,4 +59,4 @@ std::optional<T> deserialize(std::span<const std::uint8_t> bytes) {
     }
 }
 
-} // namespace bricks
+} // namespace bricks::utility

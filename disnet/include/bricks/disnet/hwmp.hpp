@@ -84,10 +84,10 @@ private:
         std::uint32_t destination_seq;
     };
 
-    static constexpr std::size_t s_data_header_size = packed_size<DataHeader>;
-    static constexpr std::size_t s_preq_header_size = packed_size<PreqHeader>;
-    static constexpr std::size_t s_prep_header_size = packed_size<PrepHeader>;
-    static constexpr std::size_t s_perr_header_size = packed_size<PerrHeader>;
+    static constexpr std::size_t s_data_header_size = bricks::utility::packed_size<DataHeader>;
+    static constexpr std::size_t s_preq_header_size = bricks::utility::packed_size<PreqHeader>;
+    static constexpr std::size_t s_prep_header_size = bricks::utility::packed_size<PrepHeader>;
+    static constexpr std::size_t s_perr_header_size = bricks::utility::packed_size<PerrHeader>;
 
 public:
     static constexpr std::size_t max_payload_size =

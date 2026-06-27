@@ -17,7 +17,7 @@ concept Versioned = requires(const T cversioned, T versioned, typename T::State 
     typename T::State;
     typename T::Version;
     typename T::TimePoint;
-    requires bricks::Serializable<typename T::State>;
+    requires bricks::utility::Serializable<typename T::State>;
     requires std::unsigned_integral<typename T::Version>;
     requires std::unsigned_integral<typename T::TimePoint>;
 

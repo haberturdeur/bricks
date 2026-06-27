@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace bricks {
+namespace bricks::utility {
 
 namespace detail {
 
@@ -266,4 +266,4 @@ struct packed_size_impl<T> {
 template <typename T>
 inline constexpr std::size_t packed_size = detail::packed_size_impl<T>::value;
 
-} // namespace bricks
+} // namespace bricks::utility

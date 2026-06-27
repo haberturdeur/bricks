@@ -79,20 +79,20 @@ struct packet_set_index<Packet, PacketSet<Packets...>> {
 template <typename Packet, typename Set>
 inline constexpr std::size_t packet_set_index_v = packet_set_index<Packet, Set>::value;
 
-template <typename PacketSetT, bricks::Serializable Packet>
+template <typename PacketSetT, bricks::utility::Serializable Packet>
 EncodedPacket serialize_packet(const Packet& packet) {
     static_assert(PacketInSet<Packet, PacketSetT>, "Packet is not present in this PacketSet");
     static_assert(packet_set_index_v<Packet, PacketSetT> <= 0xFF, "Mux packet index must fit in one byte");
     return EncodedPacket{
         .packet_index = static_cast<std::uint8_t>(packet_set_index_v<Packet, PacketSetT>),
-        .payload = bricks::serialize(packet),
+        .payload = bricks::utility::serialize(packet),
     };
 }
 
 template <std::size_t I, typename PacketSetT, typename Callback>
 bool deserialize_packet_at(const std::vector<std::uint8_t>& payload, Callback& callback) {
     using Packet = std::variant_alternative_t<I, typename PacketSetT::variant_type>;
-    std::optional<Packet> packet = bricks::deserialize<Packet>(std::span<const std::uint8_t>(payload.data(), payload.size()));
+    std::optional<Packet> packet = bricks::utility::deserialize<Packet>(std::span<const std::uint8_t>(payload.data(), payload.size()));
     if (!packet)
         return false;
     callback(std::move(*packet));

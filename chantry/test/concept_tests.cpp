@@ -34,7 +34,7 @@ struct Counter {
     }
 };
 
-static_assert(bricks::Serializable<Counter>,
+static_assert(bricks::utility::Serializable<Counter>,
               "Counter must satisfy Serializable");
 
 struct Text {
@@ -50,7 +50,7 @@ struct Text {
     }
 };
 
-static_assert(bricks::Serializable<Text>,
+static_assert(bricks::utility::Serializable<Text>,
               "Text must satisfy Serializable");
 
 // --- Not Serializable ---
@@ -59,7 +59,7 @@ struct NoSerialize {
     int x;
 };
 
-static_assert(!bricks::Serializable<NoSerialize>,
+static_assert(!bricks::utility::Serializable<NoSerialize>,
               "NoSerialize must NOT satisfy Serializable");
 
 struct BadDeserializeReturn {
@@ -67,7 +67,7 @@ struct BadDeserializeReturn {
     static BadDeserializeReturn deserialize(std::span<const std::uint8_t>) { return {}; }
 };
 
-static_assert(!bricks::Serializable<BadDeserializeReturn>,
+static_assert(!bricks::utility::Serializable<BadDeserializeReturn>,
               "BadDeserializeReturn must NOT satisfy Serializable (not optional)");
 
 // ============================================================
