@@ -82,12 +82,16 @@ private:
 
     void _switch_slot() {
         const std::size_t previous_slot = m_active_slot;
+        const std::size_t next_slot = (previous_slot + 1) % 2;
+        m_slots[next_slot].emplace(MetadataSector::create(
+            m_geometry,
+            m_partition,
+            next_slot));
         if (m_slots[previous_slot]) {
             m_slots[previous_slot]->mark_old();
             m_slots[previous_slot]->bitmap().mark_all_full_and_synced();
         }
-        m_active_slot = (m_active_slot + 1) % 2;
-        _active_slot().emplace(MetadataSector::create(m_geometry, m_partition, m_active_slot));
+        m_active_slot = next_slot;
     }
 
     bool _choose_slot() {
@@ -124,6 +128,17 @@ private:
                 return true;
             }
             if (pattern0 == Bitmap::Pattern::AllZeros && pattern1 == Bitmap::Pattern::AllZeros) {
+                if (m_geometry.data_sector_count > 0) {
+                    SectorHandle head(
+                        m_partition,
+                        m_geometry.metadata_sector_count + m_geometry.data_sector_count - 1U);
+                    const auto generation = Geometry::sector_commit_generation(
+                        head.read_byte(Geometry::sector_commit_offset));
+                    if (generation < 2) {
+                        m_active_slot = generation;
+                        return true;
+                    }
+                }
                 m_active_slot = 0;
                 return true;
             }
@@ -170,6 +185,7 @@ public:
     }
 
     std::size_t head() const { return _active_slot()->bitmap().head(); }
+    std::uint8_t generation() const { return static_cast<std::uint8_t>(m_active_slot); }
     bool is_sector_used(std::size_t idx) const {
         const auto& slot = _active_slot();
         if (!slot || idx >= m_geometry.data_sector_count)

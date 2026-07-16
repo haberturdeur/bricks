@@ -90,6 +90,41 @@ std::optional<Chronicler> Chronicler::load(PartitionHandle partition,
         return std::nullopt;
 
     detail::DataSector active = detail::DataSector::load(geometry, partition, metadata->head());
+    const auto indices = collect_used_sector_indices(*metadata, geometry);
+    std::optional<std::uint32_t> expected_first_entry_id;
+    if (indices.size() == 1 && !metadata->has_wrapped()) {
+        expected_first_entry_id = 1;
+    } else if (indices.size() >= 2) {
+        const auto previous = detail::DataSector::load(
+            geometry,
+            partition,
+            indices[indices.size() - 2]);
+        if (previous.committed())
+            expected_first_entry_id = previous.next_entry_id();
+    }
+
+    const bool entry_id_matches = !expected_first_entry_id
+        || active.first_entry_id() == *expected_first_entry_id;
+    if (!active.committed(metadata->generation())
+        || !entry_id_matches) {
+        const std::uint32_t recovered_first_entry_id = expected_first_entry_id.value_or(
+            active.first_entry_id() != 0 ? active.first_entry_id() : 1);
+        const bool fields_are_complete = active.session_id() == session_id
+            && active.first_entry_id() == recovered_first_entry_id;
+        const std::uint8_t sector_flags = fields_are_complete ? active.sector_flags() : 0;
+        if (fields_are_complete
+            && active.can_complete_commit(metadata->generation())) {
+            active.complete_commit(metadata->generation());
+        } else {
+            active = detail::DataSector::create(geometry,
+                                                partition,
+                                                metadata->head(),
+                                                session_id,
+                                                sector_flags,
+                                                recovered_first_entry_id,
+                                                metadata->generation());
+        }
+    }
 
     Chronicler out(geometry, partition, std::move(*metadata), std::move(active), session_id);
     if (dispose_other_sessions)
@@ -102,16 +137,21 @@ Chronicler Chronicler::create(PartitionHandle partition,
                               bool dispose_other_sessions) {
     detail::Geometry geometry(partition);
     detail::Metadata metadata = detail::Metadata::create(geometry, partition);
+    const auto head = metadata.head();
+    const auto generation = metadata.generation();
+    auto active = detail::DataSector::create(geometry,
+                                             partition,
+                                             head,
+                                             session_id,
+                                             0,
+                                             1,
+                                             generation);
 
     Chronicler out(geometry,
-                      partition,
-                      std::move(metadata),
-                      detail::DataSector::create(geometry,
-                                                 partition,
-                                                 metadata.head(),
-                                                 session_id,
-                                                 0),
-                      session_id);
+                   partition,
+                   std::move(metadata),
+                   std::move(active),
+                   session_id);
     if (dispose_other_sessions)
         out._mark_other_sessions_disposable();
     return out;
@@ -143,13 +183,16 @@ Chronicler::EntryHandle Chronicler::push_with_handle(std::span<const std::uint8_
 
         if (!m_active_sector->can_append(data.size())
             || m_active_sector->session_id() != m_session_id) {
+            const auto first_entry_id = m_active_sector->next_entry_id();
             _invalidate_cache();
             m_metadata.advance_head();
             m_active_sector.emplace(detail::DataSector::create(m_geometry,
                                                                m_partition,
                                                                m_metadata.head(),
                                                                m_session_id,
-                                                               m_next_sector_flags));
+                                                               m_next_sector_flags,
+                                                               first_entry_id,
+                                                               m_metadata.generation()));
             const auto head_idx = m_metadata.head();
             if (head_idx < m_sector_sizes.size()) {
                 m_sector_sizes[head_idx] = 0;
@@ -164,6 +207,7 @@ Chronicler::EntryHandle Chronicler::push_with_handle(std::span<const std::uint8_
         handle.index = static_cast<std::uint16_t>(local_index);
 
         m_active_sector->push(data, should_sync);
+        handle.entry_id = m_active_sector->entry_id(local_index);
         if (m_metadata.head() < m_sector_sizes.size()) {
             m_sector_sizes[m_metadata.head()] = m_active_sector->size();
             m_sector_sizes_valid[m_metadata.head()] = true;
@@ -259,6 +303,26 @@ std::size_t Chronicler::entry_size(std::size_t idx) const {
     return 0;
 }
 
+std::uint32_t Chronicler::entry_id(std::size_t idx) const {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::size_t remaining = idx;
+    for (auto sector_idx : collect_used_sector_indices(m_metadata, m_geometry)) {
+        if (!_sector_matches_session(sector_idx))
+            continue;
+        const detail::DataSector& sector = sector_idx == m_metadata.head()
+            ? *m_active_sector
+            : _cached_sector(sector_idx);
+        if (remaining >= sector.size()) {
+            remaining -= sector.size();
+            continue;
+        }
+        return sector.entry_id(remaining);
+    }
+
+    assert(false && "index out of range");
+    return 0;
+}
+
 void Chronicler::mark_synced(std::size_t idx) {
     std::lock_guard<std::mutex> lock(m_mutex);
     std::size_t remaining = idx;
@@ -316,6 +380,8 @@ bool Chronicler::mark_synced(EntryHandle handle) {
     }
 
     if (handle.index >= sector->size())
+        return false;
+    if (handle.entry_id != sector->entry_id(handle.index))
         return false;
     sector->mark_synced(handle.index);
     return true;
@@ -537,6 +603,7 @@ std::size_t Chronicler::iterate(IterateCallback callback,
         IterationEntry entry{};
         entry.handle.sector = static_cast<std::uint16_t>(view.idx);
         entry.handle.index = static_cast<std::uint16_t>(local_idx);
+        entry.handle.entry_id = sector.entry_id(local_idx);
         entry.session_id = view.session_id;
         entry.ordinal = emitted;
         if (!callback(entry, std::span<const std::uint8_t>(scratch.data(), scratch.size()), ctx))

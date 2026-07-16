@@ -22,6 +22,10 @@ private:
     bool m_sealed = false;
     std::uint8_t m_session_id = 0xFF;
     std::uint8_t m_sector_flags = 0xFF;
+    std::uint32_t m_first_entry_id = 0;
+    std::uint8_t m_commit_marker = 0xFF;
+    std::uint8_t m_generation = 0xFF;
+    bool m_committed = false;
     mutable std::size_t m_cached_index = std::numeric_limits<std::size_t>::max();
     mutable std::size_t m_cached_offset = 0;
 
@@ -102,13 +106,20 @@ private:
     }
 
     void _load() {
-        m_session_id = m_sector.read_byte(0);
-        m_sector_flags = m_sector.read_byte(1);
+        m_session_id = m_sector.read_byte(Geometry::sector_session_offset);
+        m_sector_flags = m_sector.read_byte(Geometry::sector_flags_offset);
+        m_first_entry_id = m_sector.read(Geometry::sector_first_entry_id_offset);
+        m_commit_marker = m_sector.read_byte(Geometry::sector_commit_offset);
+        m_generation = Geometry::sector_commit_generation(m_commit_marker);
+        m_committed = m_generation != 0xFF && m_first_entry_id != 0;
         m_size = 0;
-        m_sealed = false;
+        m_sealed = !m_committed;
         m_write_offset = m_geometry.data_offset;
         m_cached_index = std::numeric_limits<std::size_t>::max();
         m_cached_offset = 0;
+
+        if (!m_committed)
+            return;
 
         std::size_t cursor = m_geometry.data_offset;
         while (cursor + Geometry::length_header_size <= m_geometry.sector_size) {
@@ -169,12 +180,23 @@ private:
             m_sealed = true;
     }
 
-    void _format(std::uint8_t session_id, std::uint8_t sector_flags) {
+    void _format(std::uint8_t session_id,
+                 std::uint8_t sector_flags,
+                 std::uint32_t first_entry_id,
+                 std::uint8_t generation) {
         m_sector.erase();
-        m_sector.write_byte(0, session_id);
-        m_sector.write_byte(1, sector_flags);
+        m_sector.write_byte(Geometry::sector_session_offset, session_id);
+        m_sector.write_byte(Geometry::sector_flags_offset, sector_flags);
+        m_sector.write(Geometry::sector_first_entry_id_offset, first_entry_id);
+        generation &= 1U;
+        const std::uint8_t commit_marker = Geometry::sector_commit_marker(generation);
+        m_sector.write_byte(Geometry::sector_commit_offset, commit_marker);
         m_session_id = session_id;
         m_sector_flags = sector_flags;
+        m_first_entry_id = first_entry_id;
+        m_commit_marker = commit_marker;
+        m_generation = generation;
+        m_committed = true;
         m_size = 0;
         m_sealed = false;
         m_write_offset = m_geometry.data_offset;
@@ -225,9 +247,11 @@ public:
                              PartitionHandle partition,
                              std::size_t idx,
                              std::uint8_t session_id = 0,
-                             std::uint8_t sector_flags = 0) {
+                             std::uint8_t sector_flags = 0,
+                             std::uint32_t first_entry_id = 1,
+                             std::uint8_t generation = 0) {
         DataSector out(geometry, partition, idx);
-        out._format(session_id, sector_flags);
+        out._format(session_id, sector_flags, first_entry_id, generation);
         return out;
     }
 
@@ -286,6 +310,34 @@ public:
     std::size_t size() const { return m_size; }
     std::size_t idx() const { return m_idx; }
     bool sealed() const { return m_sealed; }
+    bool committed() const { return m_committed; }
+    bool committed(std::uint8_t generation) const {
+        return m_committed && m_generation == (generation & 1U);
+    }
+    bool can_complete_commit(std::uint8_t generation) const {
+        const auto target = Geometry::sector_commit_marker(generation);
+        return m_first_entry_id != 0 && (m_commit_marker & target) == target;
+    }
+    void complete_commit(std::uint8_t generation) {
+        assert(can_complete_commit(generation));
+        m_sector.write_byte(Geometry::sector_commit_offset,
+                            Geometry::sector_commit_marker(generation));
+        _load();
+    }
+    std::uint32_t first_entry_id() const { return m_first_entry_id; }
+    static std::uint32_t advance_entry_id(std::uint32_t entry_id, std::size_t count) {
+        constexpr std::uint64_t id_count = std::numeric_limits<std::uint32_t>::max();
+        if (entry_id == 0)
+            entry_id = 1;
+        const auto offset = static_cast<std::uint64_t>(count) % id_count;
+        return static_cast<std::uint32_t>(
+            ((static_cast<std::uint64_t>(entry_id) - 1U + offset) % id_count) + 1U);
+    }
+    std::uint32_t entry_id(std::size_t idx) const {
+        assert(idx < m_size);
+        return advance_entry_id(m_first_entry_id, idx);
+    }
+    std::uint32_t next_entry_id() const { return advance_entry_id(m_first_entry_id, m_size); }
 
     bool should_sync(std::size_t idx) const {
         std::uint16_t length_flags = 0;

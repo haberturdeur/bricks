@@ -59,17 +59,23 @@ CRC is computed over the payload and the 12-bit length field only (flags masked 
 
 ### Per-sector header (data sectors)
 
-Each data sector begins with two bytes of per-sector metadata:
+Each data sector begins with a seven-byte committed header:
 
 ```
 uint8_t session_id;
 uint8_t sector_flags;
+uint32_t first_entry_id;
+uint8_t commit_marker;
 ```
 
 The session ID is an 8-bit value for grouping or session tracking. The 8-bit flags are application-defined.
+`first_entry_id` gives the first record its persistent nonzero ID. `commit_marker` is programmed
+only after the other header fields are complete. Its value identifies the active metadata-slot
+generation (`0xFE` for slot A, `0xFC` for slot B), so a committed header left from the previous
+ring cycle cannot be mistaken for the newly allocated head.
 
 Layout order within a data sector is:
-1. Per-sector header (2 bytes)
+1. Per-sector header (7 bytes)
 2. Variable-length record stream
 
 Data sector layout (byte offsets relative to sector start):
@@ -104,7 +110,7 @@ Metadata sector layout (byte offsets relative to sector start):
 | Offset | Size | Field            | Notes                        |
 +--------+------+------------------+------------------------------+
 | 0      | 4    | magic            | uint32                       |
-| 4      | 4    | version          | uint32 (currently 1)         |
+| 4      | 4    | version          | uint32 (currently 2)         |
 | 8      | 1    | initialized      | 0x00 means initialized       |
 | 9      | 1    | old              | 0x00 means old slot          |
 | 10     | ...  | bitmap           | 4 bits per data sector       |
@@ -150,13 +156,21 @@ All control bytes are updated with 8-bit reads/writes. Every state transition is
      1. One bitmap all 1s, the other partial (some 0s) → partial is active (has seen use).
      2. One bitmap all 0s, the other partial → partial is active; all-0s indicates the log has wrapped at least once.
      3. Both all 1s → freshly formatted; pick the first and erase the first data sector to begin.
-     4. Both all 0s → ambiguous but consistent; pick one deterministically (for example, A).
+     4. Both all 0s → use the current head sector's commit marker to select its metadata-slot
+        generation; fall back to A only when the marker is unavailable.
 3. Find the head (append position) in the active layout by scanning the current sector’s records starting at the record-stream offset (after the per-sector header):
    * Parse `length_flags`, extract `length`, then validate bounds.
    * If `length == 0` or the record would exceed the remaining sector space, stop.
    * Read the CRC8 byte at the end of the record; if it is `0xFF` (erased), stop.
    * If `crc_escaped` is set, treat stored `0xFE` as CRC `0xFF`.
    * CRC mismatch terminates the log for that sector.
+4. If the active sector marker does not match the active metadata generation, or its first entry
+   ID does not follow the immediately preceding sector when that sector is still readable, erase
+   and reformat it. A garbage-collected predecessor does not invalidate an otherwise committed
+   active sector. Preserve sector flags when all pre-commit fields match the recovered head, even
+   if a partially programmed marker aliases the other generation. When the marker can still be
+   programmed monotonically to the expected value, complete it in place without erasing the
+   header. Repeating this recovery is safe if power is lost again.
 
 Session filtering: all public APIs operate only on sectors whose `session_id` matches the session passed to `load(...)` / `create(...)`.
 When `dispose_other_sessions` is enabled, any used sector with a different `session_id` is marked `DISPOSABLE` on startup.
@@ -166,10 +180,12 @@ When `dispose_other_sessions` is enabled, any used sector with a different `sess
 1. Ensure space in the current data sector:
    * If the current sector is full:
      * If no free data sectors remain:
-       * Mark active slot as old
-       * Switch meta slots: erase and initialize the inactive meta (see Formatting steps 2–3). This begins a new cycle.
-     * Erase the next free data sector.
-     * Mark the sector used in the active meta bitmap (program `USED` bit to 0).
+       * Erase and initialize the inactive meta (see Formatting steps 2–3).
+       * Mark the previous active slot old only after the replacement slot is initialized, then
+         switch to the replacement. This begins a new cycle without an ambiguous handoff window.
+     * Advance the metadata head and mark the next sector used (program `USED` bit to 0).
+     * Erase and format that sector, writing the generation-bound commit marker last. If power
+       fails between these steps, loading rejects the stale generation and repeats the format.
 2. Begin record: write `length_flags` (with `should_sync` cleared if required), then write payload bytes.
 3. Finish record: compute CRC8, set `crc_escaped` if needed, then program the CRC8 byte (this is the write-finished flag). If CRC8 is `0xFF`, store `0xFE`.
 4. Optional sync handling: if the entry is marked `should_sync` and a sync callback is registered via `Chronicler::set_sync_callback`, the callback runs immediately with the entry bytes. After external sync completes, program `synced` to 0. When an entire sector’s records have `synced=0` where required, you may decide to program the sector’s `FULL_AND_SYNCED` bit in the meta bitmap to 0; `Chronicler::sweep_synced_sector` implements this lazily (one sector per call) so you can treat it like a lightweight GC.
@@ -184,7 +200,8 @@ When an entry is safe to delete early, program its `entry_disposable` flag bit t
 * Bitmap bits are also inverted (erased = 1 = unknown or unused; programmed = 0 = asserted).
 * Control writes are byte-sized; no 32-bit alignment is required.
 * CRC8 bytes must be distinguishable from the erased value (`0xFF`) to act as a write-finished marker.
-* Metadata version is currently `1`.
+* Metadata version is currently `2`.
+* Entry IDs use the nonzero `uint32_t` range and wrap from `UINT32_MAX` to `1`.
 * Zero-length entries are invalid; pushes must reject them.
 * Erases are the only way to return bits to 1; plan sector lifetimes accordingly.
 * The active meta is always the one whose bitmap most plausibly reflects the latest allocation state (per Loading rules).

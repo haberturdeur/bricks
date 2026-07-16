@@ -20,6 +20,7 @@ public:
     struct EntryHandle {
         std::uint16_t sector;
         std::uint16_t index;
+        std::uint32_t entry_id;
     };
 
     enum class IterationScope : std::uint8_t {
@@ -55,6 +56,7 @@ public:
     EntryHandle push_with_handle(std::span<const std::uint8_t> data, bool should_sync);
     std::size_t read(std::size_t idx, std::span<std::uint8_t> data) const;
     std::size_t entry_size(std::size_t idx) const;
+    std::uint32_t entry_id(std::size_t idx) const;
 
     void mark_synced(std::size_t idx);
     bool mark_synced(EntryHandle handle);

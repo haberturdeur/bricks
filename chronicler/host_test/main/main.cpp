@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <string>
 #include <vector>
@@ -210,6 +211,27 @@ struct PartialWriteContext {
     std::size_t payload_written{};
     bool truncated_payload{};
 };
+
+struct PowerCutContext {
+    std::size_t cut_addr{};
+    std::size_t bytes_before_cut{};
+    bool cut{};
+};
+
+PartitionHandle::WriteHookResult power_cut_hook(std::size_t start,
+                                                std::size_t size,
+                                                void* ctx) {
+    auto* info = static_cast<PowerCutContext*>(ctx);
+    if (!info)
+        return {size, false};
+    if (info->cut)
+        return {0, true};
+    if (start == info->cut_addr) {
+        info->cut = true;
+        return {std::min(info->bytes_before_cut, size), false};
+    }
+    return {size, false};
+}
 
 PartitionHandle::WriteHookResult partial_write_hook(std::size_t start,
                                                     std::size_t size,
@@ -725,7 +747,7 @@ extern "C" void app_main(void) {
                   RC_ASSERT(std::equal(read_buf.begin(), read_buf.end(), payload.begin(), payload.end()));
               });
 
-    rc::check("erased header leaves sector appendable",
+    rc::check("erased header is uncommitted and sealed",
               [] {
                   auto partition = prepare_partition();
                   detail::Geometry geom(partition);
@@ -733,8 +755,9 @@ extern "C" void app_main(void) {
 
                   auto sector = detail::DataSector::load(geom, partition, 0);
                   RC_ASSERT(sector.size() == 0);
-                  RC_ASSERT(!sector.sealed());
-                  RC_ASSERT(sector.can_append(1));
+                  RC_ASSERT(!sector.committed());
+                  RC_ASSERT(sector.sealed());
+                  RC_ASSERT(!sector.can_append(1));
               });
 
     rc::check("length header overflow seals sector",
@@ -743,6 +766,7 @@ extern "C" void app_main(void) {
                   detail::Geometry geom(partition);
                   RC_PRE(geom.data_sector_count > 0);
 
+                  (void)detail::DataSector::create(geom, partition, 0);
                   SectorHandle sector(partition, geom.metadata_sector_count);
                   const std::uint16_t length_flags =
                       static_cast<std::uint16_t>((detail::Geometry::flag_mask & ~detail::Geometry::flag_should_sync)
@@ -763,6 +787,7 @@ extern "C" void app_main(void) {
                   detail::Geometry geom(partition);
                   RC_PRE(geom.data_sector_count > 0);
 
+                  (void)detail::DataSector::create(geom, partition, 0);
                   SectorHandle sector(partition, geom.metadata_sector_count);
                   const std::uint16_t length_flags =
                       static_cast<std::uint16_t>((detail::Geometry::flag_mask & ~detail::Geometry::flag_crc_escaped)
@@ -788,6 +813,7 @@ extern "C" void app_main(void) {
                   detail::Geometry geom(partition);
                   RC_PRE(geom.data_sector_count > 0);
 
+                  (void)detail::DataSector::create(geom, partition, 0);
                   SectorHandle sector(partition, geom.metadata_sector_count);
                   const std::uint16_t length_flags =
                       static_cast<std::uint16_t>(detail::Geometry::flag_mask | 1U);
@@ -1031,6 +1057,306 @@ extern "C" void app_main(void) {
                   RC_ASSERT(!chron.mark_synced(handle));
               });
 
+    rc::check("mark_synced handle rejects same-session wraparound alias",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  constexpr std::size_t entry_sz = 512;
+                  const std::size_t sector_capacity = sector_capacity_for_entry(geom, entry_sz);
+                  RC_PRE(sector_capacity > 0);
+
+                  auto chron = Chronicler::create(partition, session_id, false);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  fill_entry(payload, 1);
+                  const auto stale = chron.push_with_handle(payload, true);
+
+                  const std::size_t entries_before_reuse =
+                      sector_capacity * geom.data_sector_count;
+                  for (std::size_t i = 1; i <= entries_before_reuse; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(payload, i == entries_before_reuse);
+                  }
+
+                  RC_ASSERT(!chron.mark_synced(stale));
+                  RC_ASSERT(!chron.is_synced(chron.size() - 1));
+              });
+
+    rc::check("load recovers every interrupted head header write",
+              [] {
+                  constexpr std::size_t entry_sz = 3000;
+                  struct CutCase {
+                      std::size_t header_offset;
+                      std::size_t bytes_before_cut;
+                  };
+                  const std::array<CutCase, 7> cuts{{
+                      {detail::Geometry::sector_session_offset, 0},
+                      {detail::Geometry::sector_flags_offset, 0},
+                      {detail::Geometry::sector_first_entry_id_offset, 0},
+                      {detail::Geometry::sector_first_entry_id_offset, 1},
+                      {detail::Geometry::sector_first_entry_id_offset, 2},
+                      {detail::Geometry::sector_first_entry_id_offset, 3},
+                      {detail::Geometry::sector_commit_offset, 0},
+                  }};
+
+                  const auto cut_index = *rc::gen::inRange<std::size_t>(0, cuts.size());
+                  const auto& cut_case = cuts[cut_index];
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+                  RC_PRE(sector_capacity_for_entry(geom, entry_sz) == 1);
+                  std::vector<std::uint8_t> payload(entry_sz);
+
+                  auto chron = Chronicler::create(partition, session_id, false);
+                  fill_entry(payload, 1);
+                  const auto first = chron.push_with_handle(payload, false);
+                  RC_ASSERT(first.entry_id == 1);
+
+                  PowerCutContext cut;
+                  const auto head_sector_start =
+                      (geom.metadata_sector_count + 1) * partition.sector_size();
+                  cut.cut_addr = head_sector_start + cut_case.header_offset;
+                  cut.bytes_before_cut = cut_case.bytes_before_cut;
+                  PartitionHandle::set_write_hook(power_cut_hook, &cut);
+                  fill_entry(payload, 2);
+                  chron.push(payload, false);
+                  PartitionHandle::clear_write_hook();
+                  RC_ASSERT(cut.cut);
+
+                  auto loaded = Chronicler::load(partition, session_id, false);
+                  RC_ASSERT(loaded.has_value());
+                  fill_entry(payload, 3);
+                  const auto recovered = loaded->push_with_handle(payload, false);
+                  RC_ASSERT(recovered.entry_id == 2);
+              });
+
+    rc::check("load rejects a stale committed head after metadata wrap",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  constexpr std::size_t entry_sz = 3000;
+                  RC_PRE(sector_capacity_for_entry(geom, entry_sz) == 1);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, false);
+                  for (std::size_t i = 0; i < geom.data_sector_count; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(payload, false);
+                  }
+
+                  auto metadata = detail::Metadata::load(geom, partition);
+                  RC_ASSERT(metadata.has_value());
+                  metadata->advance_head();
+
+                  auto loaded = Chronicler::load(partition, session_id, false);
+                  RC_ASSERT(loaded.has_value());
+                  RC_ASSERT(loaded->size() == geom.data_sector_count - 1);
+                  fill_entry(payload, 99);
+                  const auto recovered = loaded->push_with_handle(payload, false);
+                  RC_ASSERT(recovered.entry_id == geom.data_sector_count + 1);
+              });
+
+    rc::check("recovery preserves fully written sector flags",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  constexpr std::size_t entry_sz = 3000;
+                  constexpr std::uint8_t expected_flags = 0x5A;
+                  RC_PRE(sector_capacity_for_entry(geom, entry_sz) == 1);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, false);
+                  fill_entry(payload, 1);
+                  chron.push(payload, false);
+                  chron.set_sector_flags(expected_flags);
+
+                  PowerCutContext cut;
+                  const auto head_sector_start =
+                      (geom.metadata_sector_count + 1) * partition.sector_size();
+                  cut.cut_addr = head_sector_start + detail::Geometry::sector_commit_offset;
+                  cut.bytes_before_cut = 0;
+                  PartitionHandle::set_write_hook(power_cut_hook, &cut);
+                  fill_entry(payload, 2);
+                  chron.push(payload, false);
+                  PartitionHandle::clear_write_hook();
+                  RC_ASSERT(cut.cut);
+
+                  auto loaded = Chronicler::load(partition, session_id, false);
+                  RC_ASSERT(loaded.has_value());
+                  RC_ASSERT(loaded->sector_flags() == expected_flags);
+              });
+
+    rc::check("reload preserves head after predecessor garbage collection",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  constexpr std::size_t entry_sz = 3000;
+                  RC_PRE(sector_capacity_for_entry(geom, entry_sz) == 1);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, false);
+
+                  fill_entry(payload, 1);
+                  chron.push(payload, false);
+                  fill_entry(payload, 2);
+                  chron.push(payload, false);
+                  RC_ASSERT(chron.mark_entry_disposable(0));
+                  RC_ASSERT(chron.sweep_disposable_sector());
+
+                  auto loaded = Chronicler::load(partition, session_id, false);
+                  RC_ASSERT(loaded.has_value());
+                  RC_ASSERT(loaded->size() == 1);
+                  RC_ASSERT(loaded->entry_id(0) == 2);
+              });
+
+    rc::check("recovery preserves flags after partial slot B marker",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  constexpr std::size_t entry_sz = 3000;
+                  constexpr std::uint8_t expected_flags = 0xA5;
+                  RC_PRE(sector_capacity_for_entry(geom, entry_sz) == 1);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, false);
+                  for (std::size_t i = 0; i < geom.data_sector_count; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(payload, false);
+                  }
+                  chron.set_sector_flags(expected_flags);
+
+                  PowerCutContext cut;
+                  const auto wrapped_head_start =
+                      geom.metadata_sector_count * partition.sector_size();
+                  cut.cut_addr = wrapped_head_start + detail::Geometry::sector_commit_offset;
+                  cut.bytes_before_cut = 0;
+                  PartitionHandle::set_write_hook(power_cut_hook, &cut);
+                  fill_entry(payload, 99);
+                  chron.push(payload, false);
+                  PartitionHandle::clear_write_hook();
+                  RC_ASSERT(cut.cut);
+
+                  // Slot B targets 0xFC. A torn NOR write can clear only bit 0,
+                  // leaving 0xFE, which aliases the slot-A marker.
+                  SectorHandle wrapped_head(partition, geom.metadata_sector_count);
+                  wrapped_head.write_byte(detail::Geometry::sector_commit_offset, 0xFE);
+
+                  auto loaded = Chronicler::load(partition, session_id, false);
+                  RC_ASSERT(loaded.has_value());
+                  RC_ASSERT(loaded->sector_flags() == expected_flags);
+              });
+
+    rc::check("metadata all-zero tie follows committed head generation",
+              [] {
+                  for (std::uint8_t generation = 0; generation < 2; ++generation) {
+                      auto partition = prepare_partition();
+                      detail::Geometry geom(partition);
+                      RC_PRE(geom.data_sector_count > 1);
+
+                      const std::size_t bitmap_size =
+                          (geom.data_sector_count + 1U) / 2U;
+                      const std::vector<std::uint8_t> all_zeros(bitmap_size, 0x00);
+                      SectorHandle slot0(partition, 0);
+                      SectorHandle slot1(partition, 1);
+                      write_metadata_slot(slot0, all_zeros, true);
+                      write_metadata_slot(slot1, all_zeros, true);
+
+                      constexpr std::size_t entry_sz = 3000;
+                      std::vector<std::uint8_t> payload(entry_sz);
+                      fill_entry(payload, generation + 1U);
+                      auto head = detail::DataSector::create(
+                          geom,
+                          partition,
+                          geom.data_sector_count - 1U,
+                          session_id,
+                          0,
+                          1,
+                          generation);
+                      head.push(payload, false);
+
+                      auto loaded = Chronicler::load(partition, session_id, false);
+                      RC_ASSERT(loaded.has_value());
+                      RC_ASSERT(loaded->size() == 1);
+                  }
+              });
+
+    rc::check("a second interrupted recovery retains sector flags",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 1);
+
+                  constexpr std::size_t entry_sz = 3000;
+                  constexpr std::uint8_t expected_flags = 0x3C;
+                  RC_PRE(sector_capacity_for_entry(geom, entry_sz) == 1);
+                  std::vector<std::uint8_t> payload(entry_sz);
+                  auto chron = Chronicler::create(partition, session_id, false);
+                  for (std::size_t i = 0; i < geom.data_sector_count; ++i) {
+                      fill_entry(payload, static_cast<std::uint32_t>(i));
+                      chron.push(payload, false);
+                  }
+                  chron.set_sector_flags(expected_flags);
+
+                  const auto wrapped_head_start =
+                      geom.metadata_sector_count * partition.sector_size();
+                  PowerCutContext initial_cut{
+                      wrapped_head_start + detail::Geometry::sector_commit_offset,
+                      0,
+                      false,
+                  };
+                  PartitionHandle::set_write_hook(power_cut_hook, &initial_cut);
+                  fill_entry(payload, 99);
+                  chron.push(payload, false);
+                  PartitionHandle::clear_write_hook();
+                  RC_ASSERT(initial_cut.cut);
+
+                  PowerCutContext recovery_cut{
+                      wrapped_head_start + detail::Geometry::sector_commit_offset,
+                      0,
+                      false,
+                  };
+                  PartitionHandle::set_write_hook(power_cut_hook, &recovery_cut);
+                  (void)Chronicler::load(partition, session_id, false);
+                  PartitionHandle::clear_write_hook();
+                  RC_ASSERT(recovery_cut.cut);
+
+                  auto loaded = Chronicler::load(partition, session_id, false);
+                  RC_ASSERT(loaded.has_value());
+                  RC_ASSERT(loaded->sector_flags() == expected_flags);
+              });
+
+    rc::check("entry IDs wrap from UINT32_MAX to one",
+              [] {
+                  auto partition = prepare_partition();
+                  detail::Geometry geom(partition);
+                  RC_PRE(geom.data_sector_count > 0);
+
+                  auto sector = detail::DataSector::create(
+                      geom,
+                      partition,
+                      0,
+                      session_id,
+                      0,
+                      std::numeric_limits<std::uint32_t>::max());
+                  const std::array<std::uint8_t, 1> payload{0x42};
+                  sector.push(payload, false);
+                  sector.push(payload, false);
+
+                  RC_ASSERT(sector.entry_id(0) == std::numeric_limits<std::uint32_t>::max());
+                  RC_ASSERT(sector.entry_id(1) == 1);
+                  RC_ASSERT(sector.next_entry_id() == 2);
+
+                  const auto loaded = detail::DataSector::load(geom, partition, 0);
+                  RC_ASSERT(loaded.entry_id(0) == std::numeric_limits<std::uint32_t>::max());
+                  RC_ASSERT(loaded.entry_id(1) == 1);
+                  RC_ASSERT(loaded.next_entry_id() == 2);
+              });
+
     rc::check("session filtering across wrap",
               [] {
                   auto partition = prepare_partition();
@@ -1059,7 +1385,9 @@ extern "C" void app_main(void) {
 
                   auto loaded_a = Chronicler::load(partition, session_a, false);
                   RC_ASSERT(loaded_a.has_value());
-                  RC_ASSERT(loaded_a->size() == geom.data_sector_count * sector_capacity);
+                  // Starting session B advances the head and recycles one sector from session A.
+                  RC_ASSERT(loaded_a->size()
+                            == (geom.data_sector_count - 1) * sector_capacity);
               });
 
     rc::check("dispose other sessions marks disposable",

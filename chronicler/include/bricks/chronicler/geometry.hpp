@@ -21,7 +21,7 @@ inline constexpr std::uint32_t g_magic = (((std::uint32_t)'C') << 0)
                                        | (((std::uint32_t)'H') << 8)
                                        | (((std::uint32_t)'R') << 16)
                                        | (((std::uint32_t)'N') << 24);
-inline constexpr std::uint32_t g_version = 1U;
+inline constexpr std::uint32_t g_version = 2U;
 
 struct Geometry {
     std::size_t data_offset;
@@ -29,7 +29,17 @@ struct Geometry {
     std::size_t data_sector_count;
     std::size_t sector_size;
 
-    static constexpr std::size_t sector_header_size = 2;
+    static constexpr std::size_t sector_session_offset = 0;
+    static constexpr std::size_t sector_flags_offset = 1;
+    static constexpr std::size_t sector_first_entry_id_offset = 2;
+    static constexpr std::size_t sector_commit_offset = 6;
+    static constexpr std::size_t sector_header_size = 7;
+    static constexpr std::uint8_t sector_commit_marker(std::uint8_t generation) {
+        return (generation & 1U) == 0 ? 0xFE : 0xFC;
+    }
+    static constexpr std::uint8_t sector_commit_generation(std::uint8_t marker) {
+        return marker == 0xFE ? 0 : marker == 0xFC ? 1 : 0xFF;
+    }
     static constexpr std::size_t length_header_size = 2;
     static constexpr std::size_t crc_size = 1;
     static constexpr std::size_t record_overhead = length_header_size + crc_size;

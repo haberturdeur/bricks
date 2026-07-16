@@ -590,6 +590,7 @@ TEST_CASE("length header zero seals sector", "[data_sector]") {
     wipe_partition(partition);
 
     detail::Geometry geom(partition);
+    (void)detail::DataSector::create(geom, partition, 0);
     SectorHandle sector(partition, geom.metadata_sector_count);
 
     std::uint8_t header[detail::Geometry::length_header_size]{};
@@ -608,6 +609,7 @@ TEST_CASE("length header overflow seals sector", "[data_sector]") {
     wipe_partition(partition);
 
     detail::Geometry geom(partition);
+    (void)detail::DataSector::create(geom, partition, 0);
     SectorHandle sector(partition, geom.metadata_sector_count);
 
     const std::uint16_t length_flags =
@@ -628,6 +630,7 @@ TEST_CASE("missing crc seals sector", "[data_sector]") {
     wipe_partition(partition);
 
     detail::Geometry geom(partition);
+    (void)detail::DataSector::create(geom, partition, 0);
     SectorHandle sector(partition, geom.metadata_sector_count);
 
     const std::uint16_t length_flags = static_cast<std::uint16_t>(detail::Geometry::flag_mask | 16U);
@@ -650,6 +653,7 @@ TEST_CASE("crc escape flag mismatch seals sector", "[data_sector]") {
     wipe_partition(partition);
 
     detail::Geometry geom(partition);
+    (void)detail::DataSector::create(geom, partition, 0);
     SectorHandle sector(partition, geom.metadata_sector_count);
 
     const std::uint16_t length_flags =
@@ -674,6 +678,7 @@ TEST_CASE("crc escape byte without flag seals sector", "[data_sector]") {
     wipe_partition(partition);
 
     detail::Geometry geom(partition);
+    (void)detail::DataSector::create(geom, partition, 0);
     SectorHandle sector(partition, geom.metadata_sector_count);
 
     const std::uint16_t length_flags = static_cast<std::uint16_t>(detail::Geometry::flag_mask | 1U);
@@ -692,7 +697,7 @@ TEST_CASE("crc escape byte without flag seals sector", "[data_sector]") {
     TEST_ASSERT_TRUE(loaded.sealed());
 }
 
-TEST_CASE("erased header leaves sector appendable", "[data_sector]") {
+TEST_CASE("erased header is uncommitted and sealed", "[data_sector]") {
     auto partition = make_partition_handle();
     wipe_partition(partition);
 
@@ -700,8 +705,9 @@ TEST_CASE("erased header leaves sector appendable", "[data_sector]") {
     auto loaded = detail::DataSector::load(geom, partition, 0);
 
     TEST_ASSERT_EQUAL_UINT32(0, loaded.size());
-    TEST_ASSERT_FALSE(loaded.sealed());
-    TEST_ASSERT_TRUE(loaded.can_append(1));
+    TEST_ASSERT_FALSE(loaded.committed());
+    TEST_ASSERT_TRUE(loaded.sealed());
+    TEST_ASSERT_FALSE(loaded.can_append(1));
 }
 
 TEST_CASE("record overflow seals sector", "[data_sector]") {
@@ -709,6 +715,7 @@ TEST_CASE("record overflow seals sector", "[data_sector]") {
     wipe_partition(partition);
 
     detail::Geometry geom(partition);
+    (void)detail::DataSector::create(geom, partition, 0);
     SectorHandle sector(partition, geom.metadata_sector_count);
 
     const std::size_t capacity = geom.sector_size - detail::Geometry::sector_header_size;
@@ -1691,6 +1698,38 @@ TEST_CASE("push_with_handle returns handle for mark_synced", "[chronicler][sync]
     TEST_ASSERT_FALSE(chron.is_synced(0));
     TEST_ASSERT_TRUE(chron.mark_synced(handle));
     TEST_ASSERT_TRUE(chron.is_synced(0));
+}
+
+TEST_CASE("entry IDs survive reload and continue across sessions", "[chronicler][entry-id]") {
+    auto partition = make_partition_handle();
+    wipe_partition(partition);
+
+    detail::Geometry geom(partition);
+    require_data_sectors_or_skip(geom, 2);
+    std::vector<std::uint8_t> payload(entry_size);
+    fill_entry(payload, 9);
+
+    {
+        auto chron = Chronicler::create(partition, session_id, false);
+        const auto first = chron.push_with_handle(payload, true);
+        const auto second = chron.push_with_handle(payload, true);
+        TEST_ASSERT_EQUAL_UINT32(1, first.entry_id);
+        TEST_ASSERT_EQUAL_UINT32(2, second.entry_id);
+        TEST_ASSERT_EQUAL_UINT32(first.entry_id, chron.entry_id(0));
+        TEST_ASSERT_EQUAL_UINT32(second.entry_id, chron.entry_id(1));
+    }
+
+    {
+        auto chron = Chronicler::load_or_create(partition, session_id, false);
+        TEST_ASSERT_EQUAL_UINT32(1, chron.entry_id(0));
+        TEST_ASSERT_EQUAL_UINT32(2, chron.entry_id(1));
+    }
+
+    const auto next_session = static_cast<std::uint8_t>(session_id + 1);
+    auto chron = Chronicler::load_or_create(partition, next_session, false);
+    const auto third = chron.push_with_handle(payload, true);
+    TEST_ASSERT_EQUAL_UINT32(3, third.entry_id);
+    TEST_ASSERT_EQUAL_UINT32(3, chron.entry_id(0));
 }
 
 TEST_CASE("sweep marks fully synced sectors lazily", "[chronicler][sync][gc]") {
